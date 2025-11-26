@@ -39,7 +39,7 @@ The bot's architecture is modular, designed for scalability and maintainability.
 
 **Technical Implementations & Feature Specifications:**
 - **Indicators:** EMA (5, 10, 20, 50), RSI (14 with 20-bar history), Stochastic (K=14, D=3), ATR (14), MACD (12,26,9), Volume, Twin Range Filter, Market Bias CEREBR. Includes NaN/Inf/Negative price handling and robust validation.
-- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation. **UNLIMITED MODE: Tidak ada signal cooldown, tidak ada batas kerugian harian, tidak ada batasan jumlah sinyal.**
+- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation. **UNLIMITED MODE: Tidak ada signal cooldown, tidak ada batas kerugian harian, tidak ada batasan jumlah sinyal.** **LOT_SIZE = 0.01** ditampilkan di startup log untuk verifikasi.
 - **Access Control:** Private bot with dual-tier access (AUTHORIZED_USER_IDS for admins, ID_USER_PUBLIC for public users).
 - **Commands:** Admin commands (`/riset`, `/status`, `/tasks`, `/analytics`, `/systemhealth`) and User commands (`/start`, `/help`, `/monitor`, `/getsignal`, `/status`, `/riwayat`, `/performa`).
 - **Anti-Duplicate Protection:** Two-phase cache pattern (pending/confirmed status, hash-based tracking, thread-safe locking, TTL-backed signal cache with async cleanup) for race-condition-safe signal deduplication and chart cleanup.
@@ -64,12 +64,13 @@ The bot's architecture is modular, designed for scalability and maintainability.
 
 ## Recent Changes (26 November 2025)
 
-**UNLIMITED Sinyal Trading - Session 4:**
+**UNLIMITED Sinyal Trading + P/L Fix - Session 4:**
 - **config.py:** Batasan sinyal diubah untuk mode unlimited:
   - `SIGNAL_COOLDOWN_SECONDS`: 30 → 0 (tidak ada cooldown antar sinyal)
   - `MAX_TRADES_PER_DAY`: 999999 → 0 (unlimited, tidak ada batasan jumlah trade per hari)
   - `DAILY_LOSS_PERCENT`: 3.0 → 0.0 (unlimited, tidak ada batas kerugian harian)
   - Validasi diperbaiki untuk menerima nilai 0 (`allow_zero=True`)
+  - `LOT_SIZE = 0.01` (fixed) untuk kalkulasi P/L yang sinkron dengan MT5
 - **bot/telegram_bot.py:** Cooldown global dihapus:
   - `global_signal_cooldown`: 3.0 → 0.0 (tidak ada cooldown global)
   - `tick_throttle_seconds`: 3.0 → 0.0 (tidak ada throttle)
@@ -80,6 +81,9 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **bot/signal_session_manager.py:** Pembatasan sesi aktif dihapus:
   - User bisa membuat sinyal baru kapan saja tanpa menunggu sinyal sebelumnya selesai
   - Sinyal baru akan menggantikan sinyal yang masih aktif
+- **main.py:** Ditambahkan logging konfigurasi trading di startup:
+  - Log menampilkan `LOT_SIZE`, `XAUUSD_PIP_VALUE`, `DYNAMIC_SL_THRESHOLD`, `FIXED_RISK`
+  - Memudahkan debug dan verifikasi kalkulasi P/L
 
 **Perbaikan LSP Type Safety - Session 3 (ZERO LSP Errors):**
 - **bot/market_data.py:** Diperbaiki line 262 - ditambahkan `hasattr(nan_mask, 'sum')` guard untuk kompatibilitas type dengan pandas Series

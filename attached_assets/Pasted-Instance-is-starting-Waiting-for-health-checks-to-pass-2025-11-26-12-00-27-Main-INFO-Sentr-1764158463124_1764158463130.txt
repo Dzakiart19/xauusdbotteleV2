@@ -1,0 +1,268 @@
+Instance is starting... Waiting for health checks to pass.
+2025-11-26 12:00:27 - Main - INFO - Sentry error tracking initialized (environment: production)
+2025-11-26 12:00:27 - Main - INFO - Validating configuration...
+2025-11-26 12:00:27 - Main - INFO - ✅ Configuration validated successfully
+2025-11-26 12:00:27 - Main - INFO - Database initialized
+2025-11-26 12:00:27 - Main - INFO - Database backup manager initialized
+2025-11-26 12:00:27 - TaskScheduler - INFO - Task scheduler initialized with alert system (cleanup interval: 300s)
+2025-11-26 12:00:27 - Main - INFO - Task scheduler initialized (available in all modes)
+2025-11-26 12:00:27 - Main - INFO - Initializing Trading Bot components...
+2025-11-26 12:00:27 - Main - INFO - Error handler initialized
+2025-11-26 12:00:27 - UserManager - INFO - User manager initialized with thread-safe RLock per-user locking
+2025-11-26 12:00:27 - Main - INFO - User manager initialized
+2025-11-26 12:00:27 - MarketData - INFO - MarketDataClient initialized with enhanced error handling
+2025-11-26 12:00:27 - MarketData - INFO - WebSocket URL: wss://ws.derivws.com/websockets/v3?app_id=1089, Symbol: frxXAUUSD
+2025-11-26 12:00:27 - MarketData - INFO - Pub/Sub mechanism initialized with lifecycle management
+2025-11-26 12:00:27 - MarketData - INFO - ✅ Circuit breaker initialized for WebSocket connection (threshold=3, timeout=45s)
+2025-11-26 12:00:27 - MarketData - INFO - ✅ Connection state machine initialized
+2025-11-26 12:00:27 - Main - INFO - Market data client initialized
+2025-11-26 12:00:27 - Main - INFO - Trading strategy initialized
+2025-11-26 12:00:27 - Main - INFO - Risk manager initialized
+2025-11-26 12:00:27 - ChartGenerator - INFO - ChartGenerator initialized: max_workers=1, chart_timeout=60.0s, shutdown_timeout=30.0s (FREE_TIER_MODE=True)
+2025-11-26 12:00:27 - Main - INFO - Chart generator initialized
+2025-11-26 12:00:27 - AlertSystem - INFO - Alert system initialized (max_queue=100, max_history=100)
+2025-11-26 12:00:27 - Main - INFO - Alert system initialized
+2025-11-26 12:00:27 - SignalSessionManager - INFO - Signal Session Manager initialized with enhanced locking
+2025-11-26 12:00:27 - Main - INFO - Signal session manager initialized
+2025-11-26 12:00:27 - Main - INFO - Position tracker initialized
+2025-11-26 12:00:27 - TelegramBot - INFO - ✅ Rate limiter initialized for Telegram API
+2025-11-26 12:00:27 - TelegramBot - INFO - ✅ UNLIMITED signal detection: global_cooldown=0.0s, tick_throttle=0.0s
+2025-11-26 12:00:27 - TelegramBot - INFO - ✅ Two-phase anti-duplicate signal cache initialized (pending→confirmed) with telemetry
+2025-11-26 12:00:27 - Main - INFO - Telegram bot initialized
+2025-11-26 12:00:27 - Main - INFO - All components initialized successfully
+2025-11-26 12:00:27 - Main - INFO - ============================================================
+2025-11-26 12:00:27 - Main - INFO - XAUUSD TRADING BOT STARTING
+2025-11-26 12:00:27 - Main - INFO - ============================================================
+2025-11-26 12:00:27 - Main - INFO - Mode: LIVE
+2025-11-26 12:00:27 - Main - INFO - Config Valid: YES ✅
+2025-11-26 12:00:27 - Main - INFO - Telegram Bot Token: Configured (8083...4Ooc)
+2025-11-26 12:00:27 - Main - WARNING - ⚠️ Bot token detected - ensure it's never logged in plain text
+2025-11-26 12:00:27 - Main - INFO - Authorized Users: 1
+2025-11-26 12:00:27 - Main - INFO - LOT_SIZE: 0.01 | XAUUSD_PIP_VALUE: 10.0
+2025-11-26 12:00:27 - Main - INFO - DYNAMIC_SL_THRESHOLD: $1.0 | FIXED_RISK: $1.0
+2025-11-26 12:00:27 - Main - INFO - ============================================================
+2025-11-26 12:00:27 - Main - INFO - Starting health check server...
+2025-11-26 12:00:27 - Main - INFO - ✅ Port 5000 is available
+2025-11-26 12:00:27 - Main - INFO - Webhook route registered: /bot8083284621:AAGANGmpHZ2op0zbXt-uUb-t9dyUBYi4Ooc
+2025-11-26 12:00:27 - Main - INFO - Health check server started on port 5000
+2025-11-26 12:00:27 - Main - INFO - Loading candles from database...
+2025-11-26 12:00:27 - MarketData - INFO - Cleared existing candle builders before loading from database
+2025-11-26 12:00:27 - MarketData - INFO - ✅ Loaded candles from database: M1=100, M5=100
+2025-11-26 12:00:27 - MarketData - INFO - Bot has candles immediately - no waiting for Deriv API!
+2025-11-26 12:00:27 - MarketData - INFO - ✅ Set _loaded_from_db=True - will skip historical fetch from Deriv
+2025-11-26 12:00:27 - Main - INFO - Connecting to market data feed...
+2025-11-26 12:00:27 - Main - INFO - Waiting for initial market data (max 10s)...
+2025-11-26 12:00:27 - MarketData - INFO - 🔄 Connection state: DISCONNECTED → CONNECTING
+2025-11-26 12:00:27 - MarketData - INFO - Connecting to Deriv WebSocket (attempt 1): wss://ws.derivws.com/websockets/v3?app_id=1089
+2025-11-26 12:00:28 - Main - INFO - Connecting to market data... (0s)
+2025-11-26 12:00:28 - MarketData - INFO - 🔄 Connection state: CONNECTING → CONNECTED
+2025-11-26 12:00:28 - MarketData - INFO - ✅ Connected to Deriv WebSocket successfully
+2025-11-26 12:00:28 - MarketData - INFO - ✅ Skipping historical fetch - already loaded from DB
+2025-11-26 12:00:28 - MarketData - INFO - Current candle counts: M1=100, M5=100
+2025-11-26 12:00:28 - MarketData - INFO - Final candle counts after init: M1=100, M5=100
+2025-11-26 12:00:28 - MarketData - INFO - 📡 Subscribed to frxXAUUSD
+2025-11-26 12:00:28 - MarketData - INFO - 🔄 Starting periodic subscriber cleanup (interval=60s, stale_timeout=300s, zombie_timeout=120s)
+2025-11-26 12:00:29 - Main - INFO - ✅ Market data connection established
+2025-11-26 12:00:29 - Main - INFO - Setting up scheduled tasks...
+2025-11-26 12:00:29 - TaskScheduler - INFO - Setting up default scheduled tasks
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: cleanup_charts (interval=1800s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: aggressive_chart_cleanup (interval=300s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: daily_summary (interval=Nones, schedule=23:55:00)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: database_cleanup (interval=Nones, schedule=03:00:00)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: health_check (interval=300s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: position_monitoring (interval=10s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: periodic_gc (interval=300s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task added: save_candles (interval=60s, schedule=None)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Configured 8 default scheduled tasks
+2025-11-26 12:00:29 - Main - INFO - Scheduled tasks configured
+2025-11-26 12:00:29 - Main - INFO - Starting task scheduler...
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task scheduler started with cleanup loop
+2025-11-26 12:00:29 - Main - INFO - Starting position tracker...
+2025-11-26 12:00:29 - Main - INFO - Reloading active positions from database...
+2025-11-26 12:00:29 - PositionTracker - INFO - Reloaded 1 active positions from database
+2025-11-26 12:00:29 - Main - INFO - Initializing Telegram bot...
+2025-11-26 12:00:29 - TelegramBot - INFO - Registered dashboard cleanup handler for session end events
+2025-11-26 12:00:29 - TelegramBot - INFO - ✅ Chart cleanup integrated with SignalSessionManager
+2025-11-26 12:00:29 - TelegramBot - INFO - Registered chart eviction callback for ChartGenerator integration
+2025-11-26 12:00:29 - TelegramBot - INFO - Initializing Telegram bot...
+2025-11-26 12:00:29 - TaskScheduler - INFO - Scheduler loop started
+2025-11-26 12:00:29 - TaskScheduler - INFO - Cleanup loop started (interval: 300s)
+2025-11-26 12:00:29 - MarketData - INFO - ✅ Subscriber 'position_tracker' registered with health metrics tracking
+2025-11-26 12:00:29 - PositionTracker - INFO - Position tracker monitoring started
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: cleanup_charts
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: aggressive_chart_cleanup
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: health_check
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: position_monitoring
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: periodic_gc
+2025-11-26 12:00:29 - TaskScheduler - INFO - Executing scheduled task: save_candles
+2025-11-26 12:00:29 - TaskScheduler - INFO - Running health check...
+2025-11-26 12:00:29 - TaskScheduler - INFO - Health check OK - Current price: 4171.005
+2025-11-26 12:00:29 - MarketData - INFO - ✅ Saved candles to database: M1=100, M5=100
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: cleanup_charts (Total runs: 1, Execution time: 151.82ms)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: aggressive_chart_cleanup (Total runs: 1, Execution time: 151.87ms)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: health_check (Total runs: 1, Execution time: 151.76ms)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: periodic_gc (Total runs: 1, Execution time: 151.34ms)
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: save_candles (Total runs: 1, Execution time: 151.10ms)
+2025-11-26 12:00:29 - PositionTracker - INFO - 🛡️ Dynamic SL activated! Loss $125.85 >= $1.0. SL tightened from $4047.15 → $4046.15 (protect capital)
+2025-11-26 12:00:29 - PositionTracker - INFO - Position closed - User:7873001910 ID:13 DYNAMIC_SL_HIT P/L:$-125.85
+2025-11-26 12:00:29 - AlertSystem - INFO - Alert queued: TRADE_EXIT - Queue size: 1 (critical=False)
+2025-11-26 12:00:29 - PositionTracker - INFO - Position 13 User:7873001910 closed: DYNAMIC_SL_HIT at $4171.01
+2025-11-26 12:00:29 - TaskScheduler - INFO - Position monitoring: 1 positions updated
+2025-11-26 12:00:29 - TaskScheduler - INFO - Task completed: position_monitoring (Total runs: 1, Execution time: 201.74ms)
+2025-11-26 12:00:29 - TelegramBot - INFO - Telegram bot initialized and ready!
+2025-11-26 12:00:29 - AlertSystem - INFO - Telegram app set with 1 chat IDs
+2025-11-26 12:00:29 - Main - INFO - Telegram app set for alert system and position tracker with rate-limited callback
+2025-11-26 12:00:29 - Main - INFO - Starting background cleanup tasks...
+2025-11-26 12:00:29 - TelegramBot - INFO - ✅ Signal cache cleanup background task started
+2025-11-26 12:00:29 - TelegramBot - INFO - ✅ Dashboard cleanup background task started
+2025-11-26 12:00:29 - TelegramBot - INFO - ✅ Pending chart cleanup background task started
+2025-11-26 12:00:29 - Main - INFO - Starting Telegram bot polling...
+2025-11-26 12:00:29 - Main - INFO - Waiting for candles to build (minimal 30 candles, max 20s)...
+2025-11-26 12:00:29 - TelegramBot - INFO - ✅ Bot instance lock created: PID 1
+2025-11-26 12:00:29 - TelegramBot - INFO - Starting Telegram bot polling...
+2025-11-26 12:00:29 - TelegramBot - INFO - Telegram bot is running!
+2025-11-26 12:00:30 - Main - INFO - ✅ Got 100 candles, ready for trading!
+2025-11-26 12:00:31 - Main - INFO - Auto-starting monitoring for 1 valid users...
+2025-11-26 12:00:31 - TelegramBot - INFO - Auto-starting monitoring for chat 739***903
+2025-11-26 12:00:31 - TelegramBot - INFO - ✅ Monitoring task created for chat 739***903
+2025-11-26 12:00:31 - Main - INFO - ============================================================
+2025-11-26 12:00:31 - Main - INFO - BOT IS NOW RUNNING
+2025-11-26 12:00:31 - Main - INFO - Registered tasks: ['market_data_websocket', 'position_tracker', 'telegram_bot']
+2025-11-26 12:00:31 - Main - INFO - ============================================================
+2025-11-26 12:00:31 - Main - INFO - Press Ctrl+C to stop
+2025-11-26 12:00:31 - MarketData - INFO - ✅ Subscriber 'telegram_bot_7390867903' registered with health metrics tracking
+2025-11-26 12:00:31 - Strategy - INFO - ============================================================
+2025-11-26 12:00:31 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:31 - Strategy - INFO - ============================================================
+2025-11-26 12:00:31 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.49) > EMA20(4059.66) > EMA50(4054.66), Close(4170.91) > EMA50
+2025-11-26 12:00:31 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:31 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:31 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:31 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 12:00:32 - Strategy - INFO - ============================================================
+2025-11-26 12:00:32 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:32 - Strategy - INFO - ============================================================
+2025-11-26 12:00:32 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.50) > EMA20(4059.66) > EMA50(4054.66), Close(4170.93) > EMA50
+2025-11-26 12:00:32 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:32 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:32 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:32 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 12:00:33 - Strategy - INFO - ============================================================
+2025-11-26 12:00:33 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:33 - Strategy - INFO - ============================================================
+2025-11-26 12:00:33 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.53) > EMA20(4059.67) > EMA50(4054.67), Close(4171.01) > EMA50
+2025-11-26 12:00:33 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:33 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:33 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:33 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+Error while getting Updates: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 688, in _network_loop_retry
+    if not await action_cb():
+           ^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 384, in polling_action_cb
+    raise exc
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 373, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 558, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 525, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 3584, in get_updates
+    await self._post(
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 613, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 340, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 641, in _do_post
+    return await request.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 200, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 381, in _request_wrapper
+    raise Conflict(message)
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-11-26 12:00:34 - Strategy - INFO - ============================================================
+2025-11-26 12:00:34 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:34 - Strategy - INFO - ============================================================
+2025-11-26 12:00:34 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.52) > EMA20(4059.67) > EMA50(4054.67), Close(4171.01) > EMA50
+2025-11-26 12:00:34 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:34 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:34 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:34 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 12:00:37 - Strategy - INFO - ============================================================
+2025-11-26 12:00:37 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:37 - Strategy - INFO - ============================================================
+2025-11-26 12:00:37 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.52) > EMA20(4059.67) > EMA50(4054.67), Close(4171.00) > EMA50
+2025-11-26 12:00:37 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:37 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:37 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:37 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+Instance is healthy. All health checks are passing.
+2025-11-26 12:00:38 - Strategy - INFO - ============================================================
+2025-11-26 12:00:38 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:38 - Strategy - INFO - ============================================================
+2025-11-26 12:00:38 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.52) > EMA20(4059.67) > EMA50(4054.67), Close(4171.00) > EMA50
+2025-11-26 12:00:38 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:38 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:38 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:38 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 12:00:39 - Strategy - INFO - ============================================================
+2025-11-26 12:00:39 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:39 - Strategy - INFO - ============================================================
+2025-11-26 12:00:39 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.49) > EMA20(4059.66) > EMA50(4054.66), Close(4170.91) > EMA50
+2025-11-26 12:00:39 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:39 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:39 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:39 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+Error while getting Updates: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 688, in _network_loop_retry
+    if not await action_cb():
+           ^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 384, in polling_action_cb
+    raise exc
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_updater.py", line 373, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 558, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 525, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 3584, in get_updates
+    await self._post(
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 613, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 340, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 641, in _do_post
+    return await request.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 200, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 381, in _request_wrapper
+    raise Conflict(message)
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-11-26 12:00:40 - Strategy - INFO - ============================================================
+2025-11-26 12:00:40 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 12:00:40 - Strategy - INFO - ============================================================
+2025-11-26 12:00:40 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4087.49) > EMA20(4059.66) > EMA50(4054.66), Close(4170.90) > EMA50
+2025-11-26 12:00:40 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 12:00:40 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 12:00:40 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 12:00:40 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 12:00:40 - TaskScheduler - INFO - Executing scheduled task: position_monitoring
+2025-11-26 12:00:40 - TaskScheduler - INFO - Task completed: position_monitoring (Total runs: 2, Execution time: 0.58ms)

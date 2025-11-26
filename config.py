@@ -295,7 +295,7 @@ class Config:
         if err:
             errors.append(err)
         
-        err = _validate_range(cls.DAILY_LOSS_PERCENT, 0.01, 100, "DAILY_LOSS_PERCENT")
+        err = _validate_range(cls.DAILY_LOSS_PERCENT, 0.0, 100, "DAILY_LOSS_PERCENT")
         if err:
             errors.append(err)
         
@@ -372,7 +372,7 @@ class Config:
         if err:
             errors.append(err)
         
-        err = _validate_positive(cls.MAX_TRADES_PER_DAY, "MAX_TRADES_PER_DAY")
+        err = _validate_positive(cls.MAX_TRADES_PER_DAY, "MAX_TRADES_PER_DAY", allow_zero=True)
         if err:
             errors.append(err)
         

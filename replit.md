@@ -39,7 +39,7 @@ The bot's architecture is modular, designed for scalability and maintainability.
 
 **Technical Implementations & Feature Specifications:**
 - **Indicators:** EMA (5, 10, 20, 50), RSI (14 with 20-bar history), Stochastic (K=14, D=3), ATR (14), MACD (12,26,9), Volume, Twin Range Filter, Market Bias CEREBR. Includes NaN/Inf/Negative price handling and robust validation.
-- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), signal cooldown (120s per user), daily loss limit (3% per user), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation.
+- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation. **UNLIMITED MODE: Tidak ada signal cooldown, tidak ada batas kerugian harian, tidak ada batasan jumlah sinyal.**
 - **Access Control:** Private bot with dual-tier access (AUTHORIZED_USER_IDS for admins, ID_USER_PUBLIC for public users).
 - **Commands:** Admin commands (`/riset`, `/status`, `/tasks`, `/analytics`, `/systemhealth`) and User commands (`/start`, `/help`, `/monitor`, `/getsignal`, `/status`, `/riwayat`, `/performa`).
 - **Anti-Duplicate Protection:** Two-phase cache pattern (pending/confirmed status, hash-based tracking, thread-safe locking, TTL-backed signal cache with async cleanup) for race-condition-safe signal deduplication and chart cleanup.
@@ -47,7 +47,7 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Chart Generation:** Uses `mplfinance` and `matplotlib` for multi-panel charts, configured for headless operation, with configurable timeouts and proper thread cleanup. Charts are automatically deleted upon signal session end with aggressive cleanup.
 - **Multi-User Support:** Implements per-user position tracking and risk management.
 - **Deployment:** Optimized for Koyeb and Replit, featuring an HTTP server for health checks and webhooks, and `FREE_TIER_MODE` for resource efficiency.
-- **Performance Optimization:** Global signal cooldown (3.0s), tick throttling (3.0s), position monitoring early exit, optimized Telegram timeout handling, and fast text-only exit notifications.
+- **Performance Optimization:** **UNLIMITED MODE** - tidak ada global signal cooldown, tidak ada tick throttling, position monitoring early exit, optimized Telegram timeout handling, dan fast text-only exit notifications.
 - **Logging & Error Handling:** Rate-limited logging, log rotation, type-safe indicator computations, and comprehensive exception handling with categorization for critical errors and deprecated API compatibility.
 - **Task Management:** Centralized task registry with shielded cancellation for graceful shutdown, background task callbacks, and stale task detection.
 
@@ -63,6 +63,23 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring (optional).
 
 ## Recent Changes (26 November 2025)
+
+**UNLIMITED Sinyal Trading - Session 4:**
+- **config.py:** Batasan sinyal diubah untuk mode unlimited:
+  - `SIGNAL_COOLDOWN_SECONDS`: 30 → 0 (tidak ada cooldown antar sinyal)
+  - `MAX_TRADES_PER_DAY`: 999999 → 0 (unlimited, tidak ada batasan jumlah trade per hari)
+  - `DAILY_LOSS_PERCENT`: 3.0 → 0.0 (unlimited, tidak ada batas kerugian harian)
+  - Validasi diperbaiki untuk menerima nilai 0 (`allow_zero=True`)
+- **bot/telegram_bot.py:** Cooldown global dihapus:
+  - `global_signal_cooldown`: 3.0 → 0.0 (tidak ada cooldown global)
+  - `tick_throttle_seconds`: 3.0 → 0.0 (tidak ada throttle)
+- **bot/risk_manager.py:** Pengecekan pembatasan dihapus:
+  - Cooldown per-user dihapus
+  - Batas kerugian harian dihapus
+  - **PENTING:** Time filter dan spread filter TETAP AKTIF untuk keamanan trading
+- **bot/signal_session_manager.py:** Pembatasan sesi aktif dihapus:
+  - User bisa membuat sinyal baru kapan saja tanpa menunggu sinyal sebelumnya selesai
+  - Sinyal baru akan menggantikan sinyal yang masih aktif
 
 **Perbaikan LSP Type Safety - Session 3 (ZERO LSP Errors):**
 - **bot/market_data.py:** Diperbaiki line 262 - ditambahkan `hasattr(nan_mask, 'sum')` guard untuk kompatibilitas type dengan pandas Series

@@ -12,6 +12,10 @@ from bot.logger import setup_logger
 
 logger = setup_logger('SignalSessionManager')
 
+class SessionError(Exception):
+    """Exception untuk error pada signal session management"""
+    pass
+
 @dataclass
 class SignalSession:
     """Representasi sesi sinyal aktif"""
@@ -238,6 +242,10 @@ class SignalSessionManager:
     def get_active_session(self, user_id: int) -> Optional[SignalSession]:
         """Ambil sesi aktif untuk user"""
         return self.active_sessions.get(user_id)
+    
+    def get_session(self, user_id: int) -> Optional[SignalSession]:
+        """Alias untuk get_active_session untuk kompatibilitas"""
+        return self.get_active_session(user_id)
     
     def has_active_session(self, user_id: int) -> bool:
         """Cek apakah user punya sesi aktif"""

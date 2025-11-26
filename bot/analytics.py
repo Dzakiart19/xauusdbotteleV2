@@ -12,6 +12,10 @@ from bot.database import Trade, Position
 
 logger = setup_logger('Analytics')
 
+class AnalyticsError(Exception):
+    """Exception untuk error pada analytics"""
+    pass
+
 class AnalyticsCache:
     """Simple time-based cache for expensive analytics queries"""
     def __init__(self, ttl_seconds: int = 300):

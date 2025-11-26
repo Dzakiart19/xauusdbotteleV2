@@ -9,6 +9,12 @@ from bot.logger import setup_logger
 
 logger = setup_logger('TaskScheduler')
 
+
+class TaskSchedulerError(Exception):
+    """Exception untuk error pada task scheduler"""
+    pass
+
+
 TASK_EXECUTION_TIMEOUT = 60
 TASK_CANCEL_TIMEOUT = 5
 SCHEDULER_STOP_TIMEOUT = 10

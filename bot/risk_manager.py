@@ -5,6 +5,10 @@ from bot.logger import setup_logger
 
 logger = setup_logger('RiskManager')
 
+class RiskManagerError(Exception):
+    """Exception untuk error pada risk management"""
+    pass
+
 class RiskManager:
     def __init__(self, config, db_manager, alert_system=None):
         self.config = config
@@ -53,6 +57,9 @@ class RiskManager:
         
         if total_daily_pl is None:
             session = self.db.get_session()
+            if session is None:
+                logger.error("Failed to get database session")
+                return False, "Error: Database session tidak tersedia"
             try:
                 from bot.database import Trade
                 
@@ -274,6 +281,28 @@ class RiskManager:
             jakarta_time = utc_now.astimezone(jakarta_tz)
             
             session = self.db.get_session()
+            if session is None:
+                logger.error("Failed to get database session for daily stats")
+                return {
+                    'date': jakarta_time.strftime('%Y-%m-%d'),
+                    'error': 'Database session tidak tersedia',
+                    'total_trades': 0,
+                    'closed_trades': 0,
+                    'open_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'breakeven': 0,
+                    'win_rate': 0,
+                    'total_pl': 0,
+                    'total_profit': 0,
+                    'total_loss': 0,
+                    'avg_win': 0,
+                    'avg_loss': 0,
+                    'profit_factor': 'N/A',
+                    'daily_loss_percent': 0,
+                    'loss_limit_used': 0,
+                    'can_trade': True
+                }
             try:
                 from bot.database import Trade
                 

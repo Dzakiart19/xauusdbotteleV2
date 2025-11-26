@@ -146,7 +146,7 @@ class PositionTracker:
         self.auto_cancel_threshold = TASK_AUTO_CANCEL_THRESHOLD
         self.slow_task_alert_count = SLOW_TASK_ALERT_COUNT
     
-    def _on_task_done(self, task: asyncio.Task, task_name: str = None) -> None:
+    def _on_task_done(self, task: asyncio.Task, task_name: Optional[str] = None) -> None:
         """Callback invoked when a tracked task completes.
         
         Handles:
@@ -241,7 +241,7 @@ class PositionTracker:
         if len(self._pending_tasks) == 0:
             self._completion_event.set()
     
-    def _record_exception(self, task_name: str, exception: Exception) -> None:
+    def _record_exception(self, task_name: str, exception: BaseException) -> None:
         """Record exception in history for debugging"""
         try:
             tb_str = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
@@ -271,10 +271,10 @@ class PositionTracker:
         """Get statistics on slow tasks"""
         return dict(self._slow_task_counts)
     
-    def _create_tracked_task(self, coro, name: str = None, 
-                             on_complete: Callable = None,
-                             resolve_session_user_id: int = None,
-                             timeout: float = None) -> asyncio.Task:
+    def _create_tracked_task(self, coro, name: Optional[str] = None, 
+                             on_complete: Optional[Callable] = None,
+                             resolve_session_user_id: Optional[int] = None,
+                             timeout: Optional[float] = None) -> asyncio.Task:
         """Create a task and track it for proper cleanup on shutdown.
         
         Args:
@@ -339,14 +339,14 @@ class PositionTracker:
                 has_active = user_id in self.active_positions and len(self.active_positions[user_id]) > 0
             
             if not has_active:
-                session = self.signal_session_manager.get_session(user_id)
-                if session and session.get('status') == 'monitoring':
+                session = self.signal_session_manager.get_active_session(user_id)
+                if session:
                     logger.info(f"Resolving orphaned session state for user {user_id}")
                     await self.signal_session_manager.end_session(user_id, 'RESOLVED')
         except (asyncio.CancelledError, asyncio.TimeoutError, KeyError, ValueError, AttributeError) as e:
             logger.error(f"Error resolving session state for user {user_id}: {e}")
     
-    async def wait_for_completion(self, timeout: float = None, 
+    async def wait_for_completion(self, timeout: Optional[float] = None, 
                                    progress_interval: float = 5.0) -> TaskCompletionResult:
         """Wait for all pending tasks to complete with detailed progress tracking.
         
@@ -585,9 +585,9 @@ class PositionTracker:
             self._task_monitor_task = None
             logger.info("Task timeout monitor stopped")
     
-    def configure_timeouts(self, long_running_threshold: float = None,
-                           auto_cancel_threshold: float = None,
-                           slow_task_alert_count: int = None) -> None:
+    def configure_timeouts(self, long_running_threshold: Optional[float] = None,
+                           auto_cancel_threshold: Optional[float] = None,
+                           slow_task_alert_count: Optional[int] = None) -> None:
         """Configure task timeout thresholds.
         
         Args:

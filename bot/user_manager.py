@@ -30,6 +30,10 @@ from sqlalchemy.orm import sessionmaker, scoped_session, Mapped, mapped_column, 
 
 logger = setup_logger('UserManager')
 
+class UserManagerError(Exception):
+    """Exception untuk error pada user management"""
+    pass
+
 class Base(DeclarativeBase):
     pass
 

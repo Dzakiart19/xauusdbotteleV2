@@ -27,6 +27,11 @@ HISTORY_CLEANUP_BACKOFF_BASE = 60.0
 HISTORY_CLEANUP_BACKOFF_MAX = 3600.0
 
 
+class AlertSystemError(Exception):
+    """Exception untuk error pada alert system"""
+    pass
+
+
 class AlertPriority:
     """Alert priority levels for queue management"""
     CRITICAL = 0
@@ -428,6 +433,9 @@ class AlertSystem:
     async def send_daily_summary(self):
         try:
             session = self.db.get_session()
+            if session is None:
+                logger.error("Failed to get database session for daily summary")
+                return
             
             jakarta_tz = pytz.timezone('Asia/Jakarta')
             today = datetime.now(jakarta_tz).replace(hour=0, minute=0, second=0, microsecond=0)

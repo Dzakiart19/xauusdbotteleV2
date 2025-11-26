@@ -80,7 +80,7 @@ class TradingBotOrchestrator:
             self.config.validate()
             logger.info("✅ Configuration validated successfully")
             self.config_valid = True
-        except Exception as e:
+        except ConfigError as e:
             logger.warning(f"⚠️ Configuration validation issues: {e}")
             logger.warning("Bot will start in limited mode - health check will be available")
             logger.warning("Set missing environment variables and restart to enable full functionality")
@@ -370,7 +370,7 @@ class TradingBotOrchestrator:
                 except json.JSONDecodeError:
                     domain = replit_domains.strip().strip('[]"\'').split(',')[0].strip().strip('"\'')
                     logger.warning(f"Failed to parse REPLIT_DOMAINS as JSON, using fallback: {domain}")
-                except Exception as e:
+                except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"Error parsing REPLIT_DOMAINS: {e}")
             
             if not domain and replit_dev_domain:
@@ -390,7 +390,7 @@ class TradingBotOrchestrator:
                 if not parsed.netloc or parsed.netloc != domain:
                     logger.error(f"Domain validation failed - invalid structure: {domain}")
                     return None
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Domain validation error: {e}")
                 return None
             
@@ -447,12 +447,12 @@ class TradingBotOrchestrator:
                     try:
                         count_result = session.execute(text("SELECT COUNT(*) FROM positions WHERE status = 'open'"))
                         position_count = count_result.scalar() or 0
-                    except Exception:
+                    except (Exception,):
                         position_count = 0
                     
                     session.close()
                     db_status = 'connected'
-                except Exception as e:
+                except (Exception,) as e:
                     db_status = f'error: {str(e)[:50]}'
                     logger.error(f"Database health check failed: {e}")
                 
@@ -463,13 +463,13 @@ class TradingBotOrchestrator:
                 if self.config_valid and self.telegram_bot:
                     try:
                         cache_stats = self.telegram_bot.get_cache_stats()
-                    except Exception:
+                    except (Exception,):
                         cache_stats = {'error': 'unavailable'}
                 
                 if self.config_valid and self.chart_generator:
                     try:
                         chart_stats = self.chart_generator.get_stats()
-                    except Exception:
+                    except (Exception,):
                         chart_stats = {'error': 'unavailable'}
                 
                 mode = 'full' if self.config_valid else 'limited'
@@ -530,7 +530,7 @@ class TradingBotOrchestrator:
                     logger.info(f"✅ Webhook processed successfully: update_id={update_id}")
                     return web.json_response({'ok': True})
                     
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"❌ Error processing webhook request: {e}")
                     logger.error(f"Request path: {request.path}, Method: {request.method}")
                     if self.error_handler:
@@ -562,7 +562,7 @@ class TradingBotOrchestrator:
             elif self.config.TELEGRAM_WEBHOOK_MODE:
                 logger.info("Webhook mode enabled but endpoint not available (limited mode)")
             
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Failed to start health server: {e}")
     
     async def setup_scheduled_tasks(self):
@@ -715,7 +715,7 @@ class TradingBotOrchestrator:
                             logger.info("✅ Webhook setup completed successfully")
                         else:
                             logger.error("❌ Webhook setup failed!")
-                    except Exception as e:
+                    except (Exception,) as e:
                         logger.error(f"❌ Failed to setup webhook: {e}")
                         if self.error_handler:
                             self.error_handler.log_exception(e, "webhook_setup")
@@ -800,7 +800,7 @@ class TradingBotOrchestrator:
                             timeout=5.0
                         )
                         logger.debug(f"Startup message sent successfully to user {user_id}")
-                    except Exception as telegram_error:
+                    except (Exception,) as telegram_error:
                         error_type = type(telegram_error).__name__
                         error_msg = str(telegram_error).lower()
                         
@@ -827,7 +827,7 @@ class TradingBotOrchestrator:
             
         except asyncio.CancelledError:
             logger.info("Bot tasks cancelled")
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Error during bot operation: {e}")
             if self.error_handler:
                 self.error_handler.log_exception(e, "main_loop")
@@ -876,13 +876,13 @@ class TradingBotOrchestrator:
                     log_progress("MarketData", "candles saved")
                 except asyncio.TimeoutError:
                     logger.warning("[SHUTDOWN] Market data save timed out")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error saving candles: {e}")
                 
                 try:
                     self.market_data.disconnect()
                     log_progress("MarketData", "disconnected ✓")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error disconnecting market data: {e}")
             
             log_progress("Telegram", "stopping bot")
@@ -894,7 +894,7 @@ class TradingBotOrchestrator:
                     )
                 except asyncio.TimeoutError:
                     logger.warning("[SHUTDOWN] Background cleanup tasks shutdown timed out")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error stopping background cleanup tasks: {e}")
                 
                 try:
@@ -905,7 +905,7 @@ class TradingBotOrchestrator:
                     log_progress("Telegram", "stopped ✓")
                 except asyncio.TimeoutError:
                     logger.warning("[SHUTDOWN] Telegram bot shutdown timed out")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error stopping Telegram bot: {e}")
             
             log_progress("TaskScheduler", "stopping")
@@ -918,7 +918,7 @@ class TradingBotOrchestrator:
                     log_progress("TaskScheduler", "stopped ✓")
                 except asyncio.TimeoutError:
                     logger.warning("[SHUTDOWN] Task scheduler shutdown timed out")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error stopping task scheduler: {e}")
             
             log_progress("PositionTracker", "stopping")
@@ -926,7 +926,7 @@ class TradingBotOrchestrator:
                 try:
                     self.position_tracker.stop_monitoring()
                     log_progress("PositionTracker", "stopped ✓")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error stopping position tracker: {e}")
             
             log_progress("RegisteredTasks", "cancelling all")
@@ -938,7 +938,7 @@ class TradingBotOrchestrator:
                 try:
                     self.chart_generator.shutdown()
                     log_progress("ChartGenerator", "shutdown ✓")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error shutting down chart generator: {e}")
             
             log_progress("HTTPServer", "stopping health server")
@@ -951,7 +951,7 @@ class TradingBotOrchestrator:
                     log_progress("HTTPServer", "stopped ✓")
                 except asyncio.TimeoutError:
                     logger.warning("[SHUTDOWN] Health server shutdown timed out")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error stopping health server: {e}")
             
             log_progress("Database", "closing connections")
@@ -959,7 +959,7 @@ class TradingBotOrchestrator:
                 try:
                     self.db_manager.close()
                     log_progress("Database", "closed ✓")
-                except Exception as e:
+                except (Exception,) as e:
                     logger.error(f"[SHUTDOWN] Error closing database: {e}")
             
             shutdown_duration = loop.time() - shutdown_start_time
@@ -973,7 +973,7 @@ class TradingBotOrchestrator:
             import logging
             logging.shutdown()
             
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"[SHUTDOWN] Error during shutdown: {e}")
             import logging
             logging.shutdown()
@@ -1017,7 +1017,7 @@ async def main():
     except KeyboardInterrupt:
         logger.info("[SIGNAL] KeyboardInterrupt received")
         return 0
-    except Exception as e:
+    except (Exception,) as e:
         logger.error(f"[MAIN] Unhandled exception: {e}")
         return 1
     finally:
@@ -1032,7 +1032,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
         exit_code = 0
-    except Exception as e:
+    except (Exception,) as e:
         logger.error(f"Fatal error: {e}")
         exit_code = 1
     

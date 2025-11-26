@@ -432,7 +432,7 @@ class Config:
                 logger = setup_logger('Config')
                 for warning in warnings:
                     logger.warning(f"Configuration warning: {warning}")
-            except Exception:
+            except (ImportError, AttributeError):
                 pass
         
         if errors:
@@ -583,9 +583,9 @@ class Config:
                     'source': 'resource',
                     'graceful_degradation_enabled': cls.OOM_GRACEFUL_DEGRADATION
                 }
-            except Exception:
+            except (Exception,):
                 return {'status': 'unknown', 'error': 'psutil/resource not available'}
-        except Exception as e:
+        except (Exception,) as e:
             return {'status': 'error', 'error': str(e)}
     
     @classmethod

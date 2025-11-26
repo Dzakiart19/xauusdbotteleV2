@@ -477,7 +477,7 @@ class TaskScheduler:
         self._active_task_executions: Set[asyncio.Task] = set()
         self._all_created_tasks: Set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
-        self._task_exceptions: Dict[str, BaseException] = {}
+        self._task_exceptions: Dict[str, Exception] = {}
         self._exception_history: deque = deque(maxlen=100)
         self._completion_event = asyncio.Event()
         self._cleanup_interval = cleanup_interval

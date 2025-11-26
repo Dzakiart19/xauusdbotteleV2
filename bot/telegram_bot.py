@@ -255,9 +255,9 @@ class TradingBot:
         
         self.global_last_signal_time = datetime.now() - timedelta(seconds=60)
         self.signal_detection_interval = 0  # INSTANT - 0 delay, check on every tick
-        self.global_signal_cooldown = 3.0  # Global cooldown to prevent Telegram API flood
-        self.tick_throttle_seconds = 3.0  # Minimum interval between signal checks (match global cooldown)
-        logger.info(f"✅ Optimized signal detection: global_cooldown={self.global_signal_cooldown}s, tick_throttle={self.tick_throttle_seconds}s")
+        self.global_signal_cooldown = 0.0  # UNLIMITED - tidak ada cooldown global
+        self.tick_throttle_seconds = 0.0  # UNLIMITED - tidak ada throttle
+        logger.info(f"✅ UNLIMITED signal detection: global_cooldown={self.global_signal_cooldown}s, tick_throttle={self.tick_throttle_seconds}s")
         
         self.sent_signals_cache: Dict[str, Dict[str, Any]] = {}
         self.signal_cache_expiry_seconds = 120

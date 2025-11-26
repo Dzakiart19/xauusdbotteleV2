@@ -498,9 +498,9 @@ class Config:
     TP_RR_RATIO = _get_float_env('TP_RR_RATIO', '1.5')
     DEFAULT_TP_PIPS = _get_float_env('DEFAULT_TP_PIPS', '30.0')
     
-    SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '30')
-    MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '999999')
-    DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '3.0')
+    SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '0')
+    MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '0')
+    DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '0.0')
     RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '1.0')
     FIXED_RISK_AMOUNT = _get_float_env('FIXED_RISK_AMOUNT', '1.0')
     

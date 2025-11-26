@@ -35,11 +35,8 @@ class RiskManager:
                 logger.info(f"Trade blocked for user {user_id}: {spread_reason}")
                 return False, spread_reason
         
-        if user_id in self.last_signal_time:
-            time_since_last = (utc_now - self.last_signal_time[user_id]).total_seconds()
-            if time_since_last < self.config.SIGNAL_COOLDOWN_SECONDS:
-                remaining = self.config.SIGNAL_COOLDOWN_SECONDS - time_since_last
-                return False, f"Cooldown aktif. Tunggu {int(remaining)} detik lagi"
+        # UNLIMITED - Cooldown dihapus, sinyal tanpa batas
+        # Tidak ada pengecekan waktu cooldown antar sinyal
         
         cache_key = f"{user_id}_{today_str}"
         cache_ttl = 60
@@ -86,32 +83,8 @@ class RiskManager:
             finally:
                 session.close()
         
-        if total_daily_pl < 0:
-            loss_percent = abs(total_daily_pl) / self.config.ACCOUNT_BALANCE * 100
-            daily_loss_limit = self.config.DAILY_LOSS_PERCENT
-            
-            warning_threshold = daily_loss_limit * 0.8
-            if loss_percent >= warning_threshold and loss_percent < daily_loss_limit:
-                warning_key = f"{user_id}_{today_str}"
-                if warning_key not in self.risk_warning_sent_today:
-                    self.risk_warning_sent_today[warning_key] = True
-                    if self.alert_system:
-                        import asyncio
-                        try:
-                            asyncio.create_task(
-                                self.alert_system.send_risk_warning(
-                                    "Daily Loss Approaching Limit",
-                                    f"Current loss: {loss_percent:.2f}% ({loss_percent/daily_loss_limit*100:.1f}% of limit)\n"
-                                    f"Limit: {daily_loss_limit:.2f}%\n"
-                                    f"⚠️ Trading akan dihentikan saat limit tercapai"
-                                )
-                            )
-                            logger.warning(f"Risk warning sent for user {user_id}: loss {loss_percent:.2f}% approaching limit")
-                        except (RiskManagerError, Exception) as alert_error:
-                            logger.error(f"Failed to send risk warning alert: {alert_error}")
-            
-            if loss_percent >= daily_loss_limit:
-                return False, f"Batas kerugian harian {daily_loss_limit:.1f}% tercapai"
+        # UNLIMITED - Batas kerugian harian dihapus
+        # Tidak ada pengecekan daily loss limit
         
         return True, None
     

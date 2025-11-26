@@ -79,26 +79,14 @@ class SignalSessionManager:
     async def can_create_signal(self, user_id: int, signal_source: str) -> tuple[bool, Optional[str]]:
         """
         Cek apakah user bisa membuat sinyal baru
+        UNLIMITED MODE - Selalu izinkan sinyal baru tanpa batasan
         
         Returns:
             (can_create, rejection_reason)
         """
-        async with self._session_lock:
-            if user_id in self.active_sessions:
-                active = self.active_sessions[user_id]
-                
-                if active.signal_source == signal_source:
-                    reason = f"⚠️ Sinyal {signal_source} sudah aktif! Tunggu sampai posisi selesai."
-                    return False, reason
-                else:
-                    reason = (
-                        f"⚠️ Ada sinyal {active.signal_source} yang masih aktif!\n"
-                        f"Tidak bisa buat sinyal {signal_source} sekarang.\n"
-                        f"Tunggu posisi selesai dulu."
-                    )
-                    return False, reason
-            
-            return True, None
+        # UNLIMITED - Tidak ada batasan sesi aktif
+        # Sinyal baru selalu diizinkan tanpa harus menunggu sinyal sebelumnya selesai
+        return True, None
     
     async def create_session(self, user_id: int, signal_id: str, signal_source: str,
                             signal_type: str, entry_price: float, stop_loss: float,

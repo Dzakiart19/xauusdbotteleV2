@@ -10,6 +10,12 @@ from bot.logger import setup_logger
 
 logger = setup_logger('PerformanceMonitor')
 
+
+class PerformanceMonitorError(Exception):
+    """Base exception for performance monitor errors"""
+    pass
+
+
 class SystemMonitor:
     """Monitor system resources (CPU, memory, WebSocket health)"""
     

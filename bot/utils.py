@@ -17,6 +17,11 @@ logger = setup_logger('Utils')
 T = TypeVar('T')
 
 
+class UtilityError(Exception):
+    """Base exception for utility errors"""
+    pass
+
+
 class RecursionLimitExceeded(Exception):
     """Raised when recursion depth limit is exceeded"""
     pass

@@ -13,6 +13,11 @@ import json
 logger = logging.getLogger('DatabaseBackup')
 
 
+class BackupError(Exception):
+    """Base exception for backup errors"""
+    pass
+
+
 class DatabaseBackupManager:
     """Manages database backups with automatic rotation and recovery"""
     

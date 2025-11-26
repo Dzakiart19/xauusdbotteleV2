@@ -270,7 +270,8 @@ class OHLCBuilder:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
             nan_mask = df[['open', 'high', 'low', 'close']].isna().any(axis=1)
-            nan_rows = int(nan_mask.sum()) if hasattr(nan_mask, 'sum') else 0
+            nan_count = nan_mask.sum() if isinstance(nan_mask, pd.Series) else 0
+            nan_rows = int(nan_count) if nan_count else 0
             if nan_rows > 0:
                 logger.warning(f"Dropping {nan_rows} rows with NaN values from M{self.timeframe_minutes} DataFrame")
                 df = df.dropna(subset=['open', 'high', 'low', 'close'])

@@ -681,6 +681,9 @@ class TradingBotOrchestrator:
             await self.task_scheduler.start()
             
             logger.info("Starting position tracker...")
+            logger.info("Reloading active positions from database...")
+            await self.position_tracker.reload_active_positions()
+            
             position_task = asyncio.create_task(
                 self.position_tracker.monitor_positions(self.market_data)
             )

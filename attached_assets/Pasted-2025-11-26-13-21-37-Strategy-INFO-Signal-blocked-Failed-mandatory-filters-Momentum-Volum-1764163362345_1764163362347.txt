@@ -1,0 +1,137 @@
+2025-11-26 13:21:37 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:37 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:38 - Strategy - INFO - ============================================================
+2025-11-26 13:21:38 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:38 - Strategy - INFO - ============================================================
+2025-11-26 13:21:38 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.95) > EMA20(4160.07) > EMA50(4155.69), Close(4163.08) > EMA50
+2025-11-26 13:21:38 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:38 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:38 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:38 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:39 - Strategy - INFO - ============================================================
+2025-11-26 13:21:39 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:39 - Strategy - INFO - ============================================================
+2025-11-26 13:21:39 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.84) > EMA20(4160.04) > EMA50(4155.68), Close(4162.76) > EMA50
+2025-11-26 13:21:39 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:39 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:39 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:39 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:40 - Strategy - INFO - ============================================================
+2025-11-26 13:21:40 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:40 - Strategy - INFO - ============================================================
+2025-11-26 13:21:40 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.85) > EMA20(4160.05) > EMA50(4155.68), Close(4162.79) > EMA50
+2025-11-26 13:21:40 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:40 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:40 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:40 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:41 - Strategy - INFO - ============================================================
+2025-11-26 13:21:41 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:41 - Strategy - INFO - ============================================================
+2025-11-26 13:21:41 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.85) > EMA20(4160.05) > EMA50(4155.68), Close(4162.79) > EMA50
+2025-11-26 13:21:41 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:41 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:41 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:41 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:42 - Strategy - INFO - ============================================================
+2025-11-26 13:21:42 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:42 - Strategy - INFO - ============================================================
+2025-11-26 13:21:42 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.88) > EMA20(4160.06) > EMA50(4155.69), Close(4162.89) > EMA50
+2025-11-26 13:21:42 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:42 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:42 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:42 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:43 - Strategy - INFO - ============================================================
+2025-11-26 13:21:43 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:43 - Strategy - INFO - ============================================================
+2025-11-26 13:21:43 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.89) > EMA20(4160.06) > EMA50(4155.69), Close(4162.91) > EMA50
+2025-11-26 13:21:43 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:43 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:43 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:43 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:44 - Strategy - INFO - ============================================================
+2025-11-26 13:21:44 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:44 - Strategy - INFO - ============================================================
+2025-11-26 13:21:44 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.93) > EMA20(4160.07) > EMA50(4155.69), Close(4163.03) > EMA50
+2025-11-26 13:21:44 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:44 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:44 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:44 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:44 - TaskScheduler - INFO - Executing scheduled task: position_monitoring
+2025-11-26 13:21:44 - TaskScheduler - INFO - Task completed: position_monitoring (Total runs: 481, Execution time: 0.21ms)
+2025-11-26 13:21:45 - Strategy - INFO - ============================================================
+2025-11-26 13:21:45 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:45 - Strategy - INFO - ============================================================
+2025-11-26 13:21:45 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4162.01) > EMA20(4160.09) > EMA50(4155.70), Close(4163.26) > EMA50
+2025-11-26 13:21:45 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:45 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:45 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:45 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:46 - Strategy - INFO - ============================================================
+2025-11-26 13:21:46 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:46 - Strategy - INFO - ============================================================
+2025-11-26 13:21:46 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4162.05) > EMA20(4160.10) > EMA50(4155.71), Close(4163.40) > EMA50
+2025-11-26 13:21:46 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:46 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:46 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:46 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:47 - Strategy - INFO - ============================================================
+2025-11-26 13:21:47 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:47 - Strategy - INFO - ============================================================
+2025-11-26 13:21:47 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4162.08) > EMA20(4160.11) > EMA50(4155.71), Close(4163.48) > EMA50
+2025-11-26 13:21:47 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:47 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:47 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:47 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:48 - Strategy - INFO - ============================================================
+2025-11-26 13:21:48 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:48 - Strategy - INFO - ============================================================
+2025-11-26 13:21:48 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.98) > EMA20(4160.08) > EMA50(4155.70), Close(4163.17) > EMA50
+2025-11-26 13:21:48 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:48 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:48 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:48 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:49 - Strategy - INFO - ============================================================
+2025-11-26 13:21:49 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:49 - Strategy - INFO - ============================================================
+2025-11-26 13:21:49 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.96) > EMA20(4160.08) > EMA50(4155.70), Close(4163.11) > EMA50
+2025-11-26 13:21:49 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:49 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:49 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:49 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:50 - Strategy - INFO - ============================================================
+2025-11-26 13:21:50 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:50 - Strategy - INFO - ============================================================
+2025-11-26 13:21:50 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.92) > EMA20(4160.07) > EMA50(4155.69), Close(4163.00) > EMA50
+2025-11-26 13:21:50 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:50 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:50 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:50 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:51 - Strategy - INFO - ============================================================
+2025-11-26 13:21:51 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:51 - Strategy - INFO - ============================================================
+2025-11-26 13:21:51 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.96) > EMA20(4160.08) > EMA50(4155.70), Close(4163.10) > EMA50
+2025-11-26 13:21:51 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:51 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:51 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:51 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:52 - Strategy - INFO - ============================================================
+2025-11-26 13:21:52 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:52 - Strategy - INFO - ============================================================
+2025-11-26 13:21:52 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.99) > EMA20(4160.09) > EMA50(4155.70), Close(4163.20) > EMA50
+2025-11-26 13:21:52 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:52 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:52 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:52 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:53 - Strategy - INFO - ============================================================
+2025-11-26 13:21:53 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:53 - Strategy - INFO - ============================================================
+2025-11-26 13:21:53 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4161.97) > EMA20(4160.08) > EMA50(4155.70), Close(4163.16) > EMA50
+2025-11-26 13:21:53 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected
+2025-11-26 13:21:53 - Strategy - INFO - Multi-Confirmation Score: 45/100 | All 6 Mandatory Filters: False
+2025-11-26 13:21:53 - Strategy - INFO - ❌ Signal blocked - Failed mandatory filters: Momentum, Volume/VWAP, Price Action
+2025-11-26 13:21:53 - Strategy - INFO - 📊 Partial Score: 45/100 (requires all 6 filters)
+2025-11-26 13:21:54 - Strategy - INFO - ============================================================
+2025-11-26 13:21:54 - Strategy - INFO - 🔍 MULTI-CONFIRMATION SIGNAL ANALYSIS - M1
+2025-11-26 13:21:54 - Strategy - INFO - ============================================================
+2025-11-26 13:21:54 - Strategy - INFO - ✅ Trend Filter PASSED (BUY): EMA5(4162.00) > EMA20(4160.09) > EMA50(4155.70), Close(4163.22) > EMA50
+2025-11-26 13:21:54 - Strategy - INFO - ❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected

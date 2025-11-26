@@ -157,6 +157,10 @@ def retry_on_telegram_error(max_retries: int = 3, initial_delay: float = 1.0):
                         logger.error(f"Max retries reached for {func.__name__} due to timeout")
                         raise
                         
+                except BadRequest as e:
+                    logger.error(f"BadRequest in {func.__name__}: {e} - Invalid request, tidak akan retry")
+                    raise
+                
                 except NetworkError as e:
                     if attempt < max_retries - 1:
                         logger.warning(f"Network error in {func.__name__} (attempt {attempt + 1}/{max_retries}): {e}")
@@ -166,10 +170,6 @@ def retry_on_telegram_error(max_retries: int = 3, initial_delay: float = 1.0):
                     else:
                         logger.error(f"Max retries reached for {func.__name__} due to network error")
                         raise
-                
-                except BadRequest as e:
-                    logger.error(f"BadRequest in {func.__name__}: {e} - Invalid request, tidak akan retry")
-                    raise
                 
                 except Forbidden as e:
                     logger.warning(f"Forbidden in {func.__name__}: {e} - User mungkin memblokir bot atau chat tidak dapat diakses")
@@ -1152,17 +1152,23 @@ class TradingBot:
             logger.info("✅ Chart cleanup integrated with SignalSessionManager")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        message = update.effective_message
+        chat = update.effective_chat
+        if user is None or message is None or chat is None:
+            return
+        
         try:
             if self.user_manager:
                 self.user_manager.create_user(
-                    telegram_id=update.effective_user.id,
-                    username=update.effective_user.username,
-                    first_name=update.effective_user.first_name,
-                    last_name=update.effective_user.last_name
+                    telegram_id=user.id,
+                    username=user.username,
+                    first_name=user.first_name,
+                    last_name=user.last_name
                 )
-                self.user_manager.update_user_activity(update.effective_user.id)
+                self.user_manager.update_user_activity(user.id)
             
-            if not self.is_authorized(update.effective_user.id):
+            if not self.is_authorized(user.id):
                 access_denied_msg = (
                     "⛔ *Akses Ditolak*\n\n"
                     "Maaf, Anda tidak terdaftar sebagai user yang diizinkan menggunakan bot ini.\n\n"
@@ -1170,10 +1176,10 @@ class TradingBot:
                     "Hanya user yang terdaftar yang dapat mengakses fitur bot.\n\n"
                     "Jika Anda merasa ini adalah kesalahan, silakan hubungi pemilik bot."
                 )
-                await update.message.reply_text(access_denied_msg, parse_mode='Markdown')
+                await message.reply_text(access_denied_msg, parse_mode='Markdown')
                 return
             
-            user_status = "Admin" if self.is_admin(update.effective_user.id) else "User Terdaftar"
+            user_status = "Admin" if self.is_admin(user.id) else "User Terdaftar"
             mode = "LIVE" if not self.config.DRY_RUN else "DRY RUN"
             
             welcome_msg = (
@@ -1196,7 +1202,7 @@ class TradingBot:
                 "/settings - Lihat konfigurasi\n"
             )
             
-            if self.is_admin(update.effective_user.id):
+            if self.is_admin(user.id):
                 welcome_msg += (
                     "\n*Admin Commands:*\n"
                     "/riset - Reset database trading\n"
@@ -1204,8 +1210,8 @@ class TradingBot:
             
             welcome_msg += f"\n*Mode:* {mode}\n"
             
-            await update.message.reply_text(welcome_msg, parse_mode='Markdown')
-            logger.info(f"Start command executed successfully for user {mask_user_id(update.effective_user.id)}")
+            await message.reply_text(welcome_msg, parse_mode='Markdown')
+            logger.info(f"Start command executed successfully for user {mask_user_id(user.id)}")
             
         except asyncio.CancelledError:
             logger.info(f"Start command cancelled for user {mask_user_id(update.effective_user.id)}")

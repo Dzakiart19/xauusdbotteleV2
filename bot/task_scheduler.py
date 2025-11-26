@@ -477,7 +477,7 @@ class TaskScheduler:
         self._active_task_executions: Set[asyncio.Task] = set()
         self._all_created_tasks: Set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
-        self._task_exceptions: Dict[str, Exception] = {}
+        self._task_exceptions: Dict[str, BaseException] = {}
         self._exception_history: deque = deque(maxlen=100)
         self._completion_event = asyncio.Event()
         self._cleanup_interval = cleanup_interval
@@ -561,7 +561,7 @@ class TaskScheduler:
     def get_all_tasks(self) -> List[ScheduledTask]:
         return list(self.tasks.values())
     
-    def get_pending_exceptions(self) -> Dict[str, Exception]:
+    def get_pending_exceptions(self) -> Dict[str, BaseException]:
         """Get all exceptions from completed tasks.
         
         Returns:

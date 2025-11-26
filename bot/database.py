@@ -9,7 +9,7 @@ from datetime import datetime
 import os
 import time
 import threading
-from typing import Callable, Any, Optional, Generator, Dict, List
+from typing import Callable, Any, Optional, Generator, Dict, List, cast
 from functools import wraps
 import logging
 
@@ -342,10 +342,14 @@ class DatabaseManager:
     def _check_and_warn_high_utilization(self):
         """Check pool utilization and log warning if above threshold."""
         try:
+            if self.engine is None:
+                return
             pool = self.engine.pool
+            if pool is None:
+                return
             if hasattr(pool, 'checkedout') and hasattr(pool, 'size'):
-                checked_out = pool.checkedout()
-                max_connections = pool.size() + MAX_OVERFLOW
+                checked_out = pool.checkedout()  # type: ignore[union-attr]
+                max_connections = pool.size() + MAX_OVERFLOW  # type: ignore[union-attr]
                 if max_connections > 0:
                     utilization = (checked_out / max_connections) * 100
                     if utilization >= POOL_HIGH_UTILIZATION_THRESHOLD:
@@ -364,16 +368,20 @@ class DatabaseManager:
         Returns:
             Dict with pool statistics and current state
         """
+        if self.engine is None:
+            raise DatabaseError("Engine not initialized")
         pool = self.engine.pool
+        if pool is None:
+            raise DatabaseError("Connection pool not available")
         
         with self._pool_stats_lock:
             stats = self._pool_stats.copy()
         
         status = {
-            'pool_size': pool.size() if hasattr(pool, 'size') else POOL_SIZE,
-            'checked_in': pool.checkedin() if hasattr(pool, 'checkedin') else 'N/A',
-            'checked_out': pool.checkedout() if hasattr(pool, 'checkedout') else 'N/A',
-            'overflow': pool.overflow() if hasattr(pool, 'overflow') else 'N/A',
+            'pool_size': pool.size() if hasattr(pool, 'size') else POOL_SIZE,  # type: ignore[union-attr]
+            'checked_in': pool.checkedin() if hasattr(pool, 'checkedin') else 'N/A',  # type: ignore[union-attr]
+            'checked_out': pool.checkedout() if hasattr(pool, 'checkedout') else 'N/A',  # type: ignore[union-attr]
+            'overflow': pool.overflow() if hasattr(pool, 'overflow') else 'N/A',  # type: ignore[union-attr]
             'max_overflow': MAX_OVERFLOW,
             'pool_timeout': POOL_TIMEOUT,
             'total_checkouts': stats['checkouts'],
@@ -392,7 +400,8 @@ class DatabaseManager:
         status['estimated_active_connections'] = max(0, active)
         
         if hasattr(pool, 'checkedout') and hasattr(pool, 'size'):
-            utilization = pool.checkedout() / (pool.size() + MAX_OVERFLOW) * 100 if pool.size() > 0 else 0
+            pool_size = pool.size()  # type: ignore[union-attr]
+            utilization = pool.checkedout() / (pool_size + MAX_OVERFLOW) * 100 if pool_size > 0 else 0  # type: ignore[union-attr]
             status['pool_utilization_percent'] = round(utilization, 1)
         
         return status
@@ -473,6 +482,9 @@ class DatabaseManager:
         if self.is_postgres:
             logger.info("PostgreSQL detected - skipping SQLite-specific configuration")
             return
+        
+        if self.engine is None:
+            raise DatabaseError("Engine not initialized")
             
         try:
             with self.engine.connect() as conn:
@@ -497,6 +509,9 @@ class DatabaseManager:
     def _migrate_database(self):
         """Auto-migrate database schema with error handling and validation"""
         logger.info("Checking database schema migrations...")
+        
+        if self.engine is None:
+            raise DatabaseError("Engine not initialized")
         
         try:
             with self.engine.connect() as conn:
@@ -715,6 +730,8 @@ class DatabaseManager:
                     self._pool_stats['checkout_attempts'] += 1
                 
                 self._last_checkout_start.start_time = time.time()
+                if self.Session is None:
+                    raise DatabaseError("Session factory not initialized")
                 session = self.Session()
                 return session
                 
@@ -811,6 +828,8 @@ class DatabaseManager:
         session = None
         try:
             session = self.get_session()
+            if session is None:
+                raise DatabaseError("Failed to acquire database session")
             yield session
             session.commit()
         except ConnectionPoolExhausted:
@@ -890,6 +909,8 @@ class DatabaseManager:
         
         try:
             session = self.get_session()
+            if session is None:
+                raise DatabaseError("Failed to acquire database session")
             
             if isolation_level and self.is_postgres:
                 session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
@@ -983,7 +1004,7 @@ class DatabaseManager:
             trade = Trade(**trade_data)
             session.add(trade)
             session.flush()
-            trade_id = trade.id
+            trade_id = cast(int, trade.id)
             
             return trade_id
             
@@ -1033,7 +1054,7 @@ class DatabaseManager:
             position = Position(**position_data)
             session.add(position)
             session.flush()
-            position_id = position.id
+            position_id = cast(int, position.id)
             
             return position_id
             
@@ -1071,8 +1092,10 @@ class DatabaseManager:
         try:
             logger.info("Closing database connections...")
             self.log_pool_status()
-            self.Session.remove()
-            self.engine.dispose()
+            if self.Session is not None:
+                self.Session.remove()
+            if self.engine is not None:
+                self.engine.dispose()
             logger.info("✅ Database connections closed successfully")
         except (OperationalError, SQLAlchemyError, AttributeError) as e:
             logger.error(f"Error closing database: {type(e).__name__}: {e}")

@@ -9,7 +9,7 @@ from enum import Enum
 import pandas as pd
 import pytz
 import random
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Tuple, Any, Union
 from bot.logger import setup_logger
 from bot.resilience import CircuitBreaker
 
@@ -258,7 +258,8 @@ class OHLCBuilder:
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            nan_rows = df[['open', 'high', 'low', 'close']].isna().any(axis=1).sum()
+            nan_mask = df[['open', 'high', 'low', 'close']].isna().any(axis=1)
+            nan_rows = int(nan_mask.sum())
             if nan_rows > 0:
                 logger.warning(f"Dropping {nan_rows} rows with NaN values from M{self.timeframe_minutes} DataFrame")
                 df = df.dropna(subset=['open', 'high', 'low', 'close'])
@@ -1385,7 +1386,7 @@ class MarketDataClient:
             f"{validation_errors} validation errors"
         )
     
-    async def _on_message(self, message: str):
+    async def _on_message(self, message: Union[str, bytes]):
         """Process incoming WebSocket message with validation and NaN handling"""
         try:
             if not message:
@@ -1485,13 +1486,14 @@ class MarketDataClient:
     async def get_current_price(self) -> Optional[float]:
         """Get current mid price with validation"""
         try:
-            if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
-                if self.current_ask >= self.current_bid:
-                    mid_price = (self.current_bid + self.current_ask) / 2.0
-                    if is_valid_price(mid_price):
-                        return mid_price
-                else:
-                    logger.warning(f"Invalid bid/ask for price calculation: bid={self.current_bid}, ask={self.current_ask}")
+            if self.current_bid is not None and self.current_ask is not None:
+                if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
+                    if self.current_ask >= self.current_bid:
+                        mid_price = (self.current_bid + self.current_ask) / 2.0
+                        if is_valid_price(mid_price):
+                            return mid_price
+                    else:
+                        logger.warning(f"Invalid bid/ask for price calculation: bid={self.current_bid}, ask={self.current_ask}")
             
             logger.debug("No valid current price available")
             return None
@@ -1503,11 +1505,12 @@ class MarketDataClient:
     async def get_bid_ask(self) -> Optional[Tuple[float, float]]:
         """Get current bid/ask with validation"""
         try:
-            if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
-                if self.current_ask >= self.current_bid:
-                    return (self.current_bid, self.current_ask)
-                else:
-                    logger.warning(f"Invalid bid/ask: bid={self.current_bid}, ask={self.current_ask}")
+            if self.current_bid is not None and self.current_ask is not None:
+                if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
+                    if self.current_ask >= self.current_bid:
+                        return (self.current_bid, self.current_ask)
+                    else:
+                        logger.warning(f"Invalid bid/ask: bid={self.current_bid}, ask={self.current_ask}")
             
             return None
             
@@ -1518,12 +1521,13 @@ class MarketDataClient:
     async def get_spread(self) -> Optional[float]:
         """Get current spread with validation"""
         try:
-            if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
-                if self.current_ask >= self.current_bid:
-                    spread = self.current_ask - self.current_bid
-                    if spread >= 0 and not math.isnan(spread) and not math.isinf(spread):
-                        return spread
-                    logger.warning(f"Invalid spread calculated: {spread}")
+            if self.current_bid is not None and self.current_ask is not None:
+                if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
+                    if self.current_ask >= self.current_bid:
+                        spread = self.current_ask - self.current_bid
+                        if spread >= 0 and not math.isnan(spread) and not math.isinf(spread):
+                            return spread
+                        logger.warning(f"Invalid spread calculated: {spread}")
             
             return None
             

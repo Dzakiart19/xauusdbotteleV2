@@ -211,7 +211,7 @@ def _safe_clip(series: pd.Series, lower: float, upper: float) -> pd.Series:
     """Safely clip series values with Inf handling."""
     result = series.replace([np.inf, -np.inf], np.nan)
     result = result.fillna((lower + upper) / 2)
-    return result.clip(lower, upper)
+    return pd.Series(result.clip(lower, upper))
 
 
 class IndicatorEngine:
@@ -338,7 +338,8 @@ class IndicatorEngine:
             if normal.any():
                 rs_normal = avg_gain[normal] / avg_loss[normal]
                 rsi_normal = 100 - (100 / (1 + rs_normal))
-                rsi.loc[normal] = rsi_normal.values
+                rsi_normal_series = pd.Series(rsi_normal) if not isinstance(rsi_normal, pd.Series) else rsi_normal
+                rsi.loc[normal] = rsi_normal_series.values
             
             rsi = rsi.replace([np.inf, -np.inf], np.nan).fillna(50.0)
             rsi = _safe_clip(rsi, 0, 100)
@@ -376,8 +377,10 @@ class IndicatorEngine:
             stoch_k = 100 * safe_divide(numerator, range_diff, fill_value=0.5, min_denominator=1e-10)
             stoch_k = _safe_clip(stoch_k, 0, 100)
             
-            stoch_k = stoch_k.rolling(window=smooth_k, min_periods=1).mean()
+            stoch_k = pd.Series(stoch_k).rolling(window=smooth_k, min_periods=1).mean()
+            stoch_k = pd.Series(stoch_k)
             stoch_d = stoch_k.rolling(window=d_period, min_periods=1).mean()
+            stoch_d = pd.Series(stoch_d)
             
             stoch_k = stoch_k.replace([np.inf, -np.inf], np.nan).fillna(50.0)
             stoch_d = stoch_d.replace([np.inf, -np.inf], np.nan).fillna(50.0)
@@ -800,9 +803,9 @@ class IndicatorEngine:
         if has_date_index:
             try:
                 if isinstance(df.index, pd.DatetimeIndex):
-                    date_series = df.index.date
+                    date_series = pd.Series(df.index).dt.date.values
                 else:
-                    date_series = pd.to_datetime(df['time']).dt.date
+                    date_series = pd.to_datetime(df['time']).dt.date.values
                 
                 vwap = pd.Series(index=df.index, dtype=float)
                 
@@ -1065,7 +1068,7 @@ class IndicatorEngine:
             actual_period = max(1, min(period, len(df)))
             
             with np.errstate(all='ignore'):
-                volume_avg_series = volume.rolling(window=actual_period, min_periods=1).mean()
+                volume_avg_series = pd.Series(volume.rolling(window=actual_period, min_periods=1).mean())
                 volume_avg = safe_series_operation(volume_avg_series, 'value', -1, 0.0)
             
             if volume_avg > 1e-10:

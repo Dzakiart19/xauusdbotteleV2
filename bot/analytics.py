@@ -6,6 +6,7 @@ import csv
 from collections import defaultdict
 from functools import wraps
 import time
+import threading
 from sqlalchemy.orm import Session
 from bot.logger import setup_logger
 from bot.database import Trade, Position
@@ -22,30 +23,34 @@ class AnalyticsCache:
         self.ttl_seconds = ttl_seconds
         self._cache = {}
         self._timestamps = {}
+        self._lock = threading.Lock()
     
     def get(self, key: str) -> Optional[Any]:
         """Get cached value if not expired"""
-        if key in self._cache:
-            if time.time() - self._timestamps[key] < self.ttl_seconds:
-                logger.debug(f"Cache hit for key: {key}")
-                return self._cache[key]
-            else:
-                logger.debug(f"Cache expired for key: {key}")
-                del self._cache[key]
-                del self._timestamps[key]
-        return None
+        with self._lock:
+            if key in self._cache:
+                if time.time() - self._timestamps[key] < self.ttl_seconds:
+                    logger.debug(f"Cache hit for key: {key}")
+                    return self._cache[key]
+                else:
+                    logger.debug(f"Cache expired for key: {key}")
+                    del self._cache[key]
+                    del self._timestamps[key]
+            return None
     
     def set(self, key: str, value: Any):
         """Set cache value with current timestamp"""
-        self._cache[key] = value
-        self._timestamps[key] = time.time()
-        logger.debug(f"Cache set for key: {key}")
+        with self._lock:
+            self._cache[key] = value
+            self._timestamps[key] = time.time()
+            logger.debug(f"Cache set for key: {key}")
     
     def clear(self):
         """Clear all cached values"""
-        self._cache.clear()
-        self._timestamps.clear()
-        logger.info("Analytics cache cleared")
+        with self._lock:
+            self._cache.clear()
+            self._timestamps.clear()
+            logger.info("Analytics cache cleared")
 
 def cached(cache_instance: AnalyticsCache):
     """Decorator to cache function results"""

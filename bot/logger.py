@@ -211,8 +211,10 @@ def cleanup_old_logs(log_dir: str = 'logs',
                     result['deleted_count'] += 1
         
         except OSError as e:
-            result['errors'].append(f"Error processing {log_file}: {str(e)}")
-        except (LoggerError, Exception) as e:
+            result['errors'].append(f"File operation error for {log_file}: {str(e)}")
+        except ValueError as e:
+            result['errors'].append(f"Parsing error for {log_file}: {str(e)}")
+        except Exception as e:
             result['errors'].append(f"Unexpected error for {log_file}: {str(e)}")
     
     return result
@@ -283,7 +285,7 @@ def get_log_statistics(log_dir: str = 'logs') -> Dict[str, Any]:
                 newest_mtime = file_stat.st_mtime
                 result['newest_file'] = file_info
         
-        except (OSError, Exception):
+        except OSError:
             pass
     
     result['total_size_mb'] = round(result['total_size_bytes'] / (1024 * 1024), 2)
@@ -511,9 +513,12 @@ def schedule_log_cleanup(log_dir: str = 'logs',
                         f"Log cleanup: deleted {result['deleted_count']} files, "
                         f"freed {result['freed_bytes'] / 1024 / 1024:.2f}MB"
                     )
-            except (LoggerError, Exception) as e:
+            except OSError as e:
                 logger = logging.getLogger('LogCleanup')
-                logger.error(f"Log cleanup error: {e}")
+                logger.error(f"Log cleanup file operation error: {e}")
+            except Exception as e:
+                logger = logging.getLogger('LogCleanup')
+                logger.error(f"Log cleanup unexpected error: {e}")
             
             time.sleep(interval_hours * 3600)
     

@@ -17,16 +17,22 @@ Read/Write Separation:
   - Acquire per-user lock before modification
   - Use context manager for automatic lock release
   - Atomic updates within lock scope
+
+Async Support:
+- Async wrapper methods (async_*) use asyncio.to_thread for heavy operations
+- These can be called from async context without blocking the event loop
 """
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from contextlib import contextmanager
 import threading
+import asyncio
 import pytz
 from bot.logger import setup_logger
 from sqlalchemy import Integer, String, DateTime, Boolean, Float, create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session, Mapped, mapped_column, DeclarativeBase
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = setup_logger('UserManager')
 
@@ -75,6 +81,7 @@ class UserManager:
     - Context managers for clean lock handling
     - Guarded active_users mutations
     - Session-level isolation for read operations
+    - Async wrapper methods for non-blocking async context usage
     """
     def __init__(self, config, db_path: str = 'data/users.db'):
         self.config = config
@@ -136,20 +143,20 @@ class UserManager:
         try:
             yield session
             session.commit()
-        except (UserManagerError, Exception) as e:
+        except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
             try:
                 session.rollback()
-            except (UserManagerError, Exception) as rollback_error:
+            except SQLAlchemyError as rollback_error:
                 logger.error(f"Error during session rollback: {rollback_error}")
             raise
         finally:
             try:
                 session.close()
-            except (UserManagerError, Exception) as close_error:
+            except SQLAlchemyError as close_error:
                 logger.error(f"Error closing session: {close_error}")
             try:
                 self.Session.remove()
-            except (UserManagerError, Exception) as remove_error:
+            except SQLAlchemyError as remove_error:
                 logger.error(f"Error removing scoped session: {remove_error}")
     
     def create_user(self, telegram_id: int, username: Optional[str] = None,
@@ -189,9 +196,14 @@ class UserManager:
                     session.expunge(user)
                     return user
                     
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error creating user: {e}")
                     return None
+    
+    async def async_create_user(self, telegram_id: int, username: Optional[str] = None,
+                                first_name: Optional[str] = None, last_name: Optional[str] = None) -> Optional[User]:
+        """Async wrapper for create_user using asyncio.to_thread."""
+        return await asyncio.to_thread(self.create_user, telegram_id, username, first_name, last_name)
     
     def get_user(self, telegram_id: int) -> Optional[User]:
         """Get user by telegram_id (READ operation).
@@ -207,9 +219,13 @@ class UserManager:
                     session.expunge(user)
                 
                 return user
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting user: {e}")
                 return None
+    
+    async def async_get_user(self, telegram_id: int) -> Optional[User]:
+        """Async wrapper for get_user using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_user, telegram_id)
     
     def get_user_by_username(self, username: str) -> Optional[int]:
         """Get user telegram_id by username (READ operation).
@@ -220,9 +236,13 @@ class UserManager:
             try:
                 user = session.query(User).filter(User.username == username).first()
                 return int(user.telegram_id) if user else None
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting user by username: {e}")
                 return None
+    
+    async def async_get_user_by_username(self, username: str) -> Optional[int]:
+        """Async wrapper for get_user_by_username using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_user_by_username, username)
     
     def update_user_activity(self, telegram_id: int):
         """Update user activity timestamp (WRITE operation).
@@ -237,8 +257,12 @@ class UserManager:
                     if user:
                         user.last_active = datetime.utcnow()
                         logger.debug(f"Updated activity for user {telegram_id}")
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error updating user activity: {e}")
+    
+    async def async_update_user_activity(self, telegram_id: int):
+        """Async wrapper for update_user_activity using asyncio.to_thread."""
+        return await asyncio.to_thread(self.update_user_activity, telegram_id)
     
     def is_authorized(self, telegram_id: int) -> bool:
         """Check if user is authorized (READ operation - no lock needed)."""
@@ -267,9 +291,13 @@ class UserManager:
                 for user in users:
                     session.expunge(user)
                 return users
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting all users: {e}")
                 return []
+    
+    async def async_get_all_users(self) -> List[User]:
+        """Async wrapper for get_all_users using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_all_users)
     
     def get_active_users(self) -> List[User]:
         """Get all active users (READ operation - no lock needed)."""
@@ -279,9 +307,13 @@ class UserManager:
                 for user in users:
                     session.expunge(user)
                 return users
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting active users: {e}")
                 return []
+    
+    async def async_get_active_users(self) -> List[User]:
+        """Async wrapper for get_active_users using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_active_users)
     
     def deactivate_user(self, telegram_id: int) -> bool:
         """Deactivate a user (WRITE operation).
@@ -304,9 +336,13 @@ class UserManager:
                         return True
                     
                     return False
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error deactivating user: {e}")
                     return False
+    
+    async def async_deactivate_user(self, telegram_id: int) -> bool:
+        """Async wrapper for deactivate_user using asyncio.to_thread."""
+        return await asyncio.to_thread(self.deactivate_user, telegram_id)
     
     def activate_user(self, telegram_id: int) -> bool:
         """Activate a user (WRITE operation).
@@ -324,9 +360,13 @@ class UserManager:
                         return True
                     
                     return False
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error activating user: {e}")
                     return False
+    
+    async def async_activate_user(self, telegram_id: int) -> bool:
+        """Async wrapper for activate_user using asyncio.to_thread."""
+        return await asyncio.to_thread(self.activate_user, telegram_id)
     
     def update_user_stats(self, telegram_id: int, profit: float):
         """Update user trading statistics (WRITE operation).
@@ -343,8 +383,12 @@ class UserManager:
                         user.total_trades += 1
                         user.total_profit += profit
                         logger.debug(f"Updated stats for user {telegram_id}: profit={profit}")
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error updating user stats: {e}")
+    
+    async def async_update_user_stats(self, telegram_id: int, profit: float):
+        """Async wrapper for update_user_stats using asyncio.to_thread."""
+        return await asyncio.to_thread(self.update_user_stats, telegram_id, profit)
     
     def get_user_preferences(self, telegram_id: int) -> Optional[UserPreferences]:
         """Get user preferences (READ operation - no lock needed)."""
@@ -356,9 +400,13 @@ class UserManager:
                 if prefs:
                     session.expunge(prefs)
                 return prefs
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting user preferences: {e}")
                 return None
+    
+    async def async_get_user_preferences(self, telegram_id: int) -> Optional[UserPreferences]:
+        """Async wrapper for get_user_preferences using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_user_preferences, telegram_id)
     
     def update_user_preferences(self, telegram_id: int, **kwargs) -> bool:
         """Update user preferences (WRITE operation).
@@ -383,9 +431,13 @@ class UserManager:
                     logger.info(f"Updated preferences for user {telegram_id}")
                     return True
                     
-                except (UserManagerError, Exception) as e:
+                except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error updating preferences: {e}")
                     return False
+    
+    async def async_update_user_preferences(self, telegram_id: int, **kwargs) -> bool:
+        """Async wrapper for update_user_preferences using asyncio.to_thread."""
+        return await asyncio.to_thread(self.update_user_preferences, telegram_id, **kwargs)
     
     def get_user_info(self, telegram_id: int) -> Optional[Dict]:
         """Get comprehensive user info (READ operation - no lock needed)."""
@@ -423,6 +475,10 @@ class UserManager:
         
         return info
     
+    async def async_get_user_info(self, telegram_id: int) -> Optional[Dict]:
+        """Async wrapper for get_user_info using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_user_info, telegram_id)
+    
     def format_user_profile(self, telegram_id: int) -> Optional[str]:
         """Format user profile for display (READ operation - no lock needed)."""
         info = self.get_user_info(telegram_id)
@@ -443,6 +499,10 @@ class UserManager:
         
         return profile
     
+    async def async_format_user_profile(self, telegram_id: int) -> Optional[str]:
+        """Async wrapper for format_user_profile using asyncio.to_thread."""
+        return await asyncio.to_thread(self.format_user_profile, telegram_id)
+    
     def get_user_count(self) -> Dict:
         """Get user statistics (READ operation - no lock needed)."""
         with self.get_session() as session:
@@ -457,7 +517,7 @@ class UserManager:
                     'inactive': total - active,
                     'admins': admins
                 }
-            except (UserManagerError, Exception) as e:
+            except (SQLAlchemyError, ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error getting user count: {e}")
                 return {
                     'total': 0,
@@ -465,6 +525,10 @@ class UserManager:
                     'inactive': 0,
                     'admins': 0
                 }
+    
+    async def async_get_user_count(self) -> Dict:
+        """Async wrapper for get_user_count using asyncio.to_thread."""
+        return await asyncio.to_thread(self.get_user_count)
     
     def has_access(self, telegram_id: int) -> bool:
         """Check if user has access (READ operation - no lock needed)."""

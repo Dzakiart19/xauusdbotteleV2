@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
 import pytz
+from sqlalchemy.exc import SQLAlchemyError
 from bot.logger import setup_logger
 
 logger = setup_logger('RiskManager')
@@ -77,9 +78,18 @@ class RiskManager:
                 }
                 logger.debug(f"Cached daily P/L for user {user_id}: ${total_daily_pl:.2f}")
                 
-            except (RiskManagerError, Exception) as e:
-                logger.error(f"Error checking trade eligibility: {e}")
-                return False, f"Error: {str(e)}"
+            except SQLAlchemyError as e:
+                logger.error(f"Database error checking trade eligibility: {e}")
+                return False, f"Error database: {str(e)}"
+            except ValueError as e:
+                logger.error(f"Nilai tidak valid saat checking trade eligibility: {e}")
+                return False, f"Error nilai: {str(e)}"
+            except TypeError as e:
+                logger.error(f"Tipe data salah saat checking trade eligibility: {e}")
+                return False, f"Error tipe data: {str(e)}"
+            except Exception as e:
+                logger.error(f"Error tidak terduga checking trade eligibility: {e}")
+                raise RiskManagerError(f"Error checking trade eligibility: {e}") from e
             finally:
                 session.close()
         
@@ -104,8 +114,14 @@ class RiskManager:
             logger.debug(f"Spread check passed: {spread:.1f} pips <= {max_spread:.1f} pips")
             return True, "Spread dalam batas normal"
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error in check_spread_filter: {e}")
+        except AttributeError as e:
+            logger.error(f"Config attribute error in check_spread_filter: {e}")
+            return True, f"Spread check error (config): {str(e)}"
+        except (ValueError, TypeError) as e:
+            logger.error(f"Nilai/tipe error in check_spread_filter: {e}")
+            return True, f"Spread check error (nilai): {str(e)}"
+        except Exception as e:
+            logger.error(f"Error tidak terduga in check_spread_filter: {e}")
             return True, f"Spread check error: {str(e)}"
     
     def check_time_filter(self) -> Tuple[bool, str]:
@@ -154,8 +170,14 @@ class RiskManager:
             logger.debug(f"Time check passed: {current_hour}:00 WIB (trading hours: {trading_start}:00-{trading_end}:00)")
             return True, f"Dalam jam trading ({trading_start}:00-{trading_end}:00 WIB)"
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error in check_time_filter: {e}")
+        except AttributeError as e:
+            logger.error(f"Config attribute error in check_time_filter: {e}")
+            return True, f"Time check error (config): {str(e)}"
+        except KeyError as e:
+            logger.error(f"Key error in check_time_filter: {e}")
+            return True, f"Time check error (key): {str(e)}"
+        except Exception as e:
+            logger.error(f"Error tidak terduga in check_time_filter: {e}")
             return True, f"Time check error: {str(e)}"
     
     def record_signal(self, user_id: int):
@@ -179,8 +201,20 @@ class RiskManager:
             
             return lot_size
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error calculating position size: {e}")
+        except ValueError as e:
+            logger.error(f"Nilai tidak valid calculating position size: {e}")
+            return self.config.LOT_SIZE
+        except ZeroDivisionError as e:
+            logger.error(f"Division by zero calculating position size: {e}")
+            return self.config.LOT_SIZE
+        except ArithmeticError as e:
+            logger.error(f"Arithmetic error calculating position size: {e}")
+            return self.config.LOT_SIZE
+        except AttributeError as e:
+            logger.error(f"Config attribute error calculating position size: {e}")
+            return self.config.LOT_SIZE
+        except Exception as e:
+            logger.error(f"Error tidak terduga calculating position size: {e}")
             return self.config.LOT_SIZE
     
     def calculate_lot_from_risk(self, account_balance: float, sl_pips: float) -> float:
@@ -210,8 +244,20 @@ class RiskManager:
             
             return lot_size
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error in calculate_lot_from_risk: {e}")
+        except ValueError as e:
+            logger.error(f"Nilai tidak valid in calculate_lot_from_risk: {e}")
+            return self.config.LOT_SIZE
+        except ZeroDivisionError as e:
+            logger.error(f"Division by zero in calculate_lot_from_risk: {e}")
+            return self.config.LOT_SIZE
+        except ArithmeticError as e:
+            logger.error(f"Arithmetic error in calculate_lot_from_risk: {e}")
+            return self.config.LOT_SIZE
+        except AttributeError as e:
+            logger.error(f"Config attribute error in calculate_lot_from_risk: {e}")
+            return self.config.LOT_SIZE
+        except Exception as e:
+            logger.error(f"Error tidak terduga in calculate_lot_from_risk: {e}")
             return self.config.LOT_SIZE
     
     def calculate_dynamic_sl(self, entry_price: float, signal_type: str, 
@@ -245,11 +291,42 @@ class RiskManager:
             
             return sl_price, tp_price
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error calculating dynamic SL/TP: {e}")
+        except ValueError as e:
+            logger.error(f"Nilai tidak valid calculating dynamic SL/TP: {e}")
             default_sl_distance = self.config.DEFAULT_SL_PIPS / self.config.XAUUSD_PIP_VALUE
             default_tp_distance = self.config.DEFAULT_TP_PIPS / self.config.XAUUSD_PIP_VALUE
-            
+            if signal_type == 'BUY':
+                return entry_price - default_sl_distance, entry_price + default_tp_distance
+            else:
+                return entry_price + default_sl_distance, entry_price - default_tp_distance
+        except ZeroDivisionError as e:
+            logger.error(f"Division by zero calculating dynamic SL/TP: {e}")
+            default_sl_distance = self.config.DEFAULT_SL_PIPS / self.config.XAUUSD_PIP_VALUE
+            default_tp_distance = self.config.DEFAULT_TP_PIPS / self.config.XAUUSD_PIP_VALUE
+            if signal_type == 'BUY':
+                return entry_price - default_sl_distance, entry_price + default_tp_distance
+            else:
+                return entry_price + default_sl_distance, entry_price - default_tp_distance
+        except ArithmeticError as e:
+            logger.error(f"Arithmetic error calculating dynamic SL/TP: {e}")
+            default_sl_distance = self.config.DEFAULT_SL_PIPS / self.config.XAUUSD_PIP_VALUE
+            default_tp_distance = self.config.DEFAULT_TP_PIPS / self.config.XAUUSD_PIP_VALUE
+            if signal_type == 'BUY':
+                return entry_price - default_sl_distance, entry_price + default_tp_distance
+            else:
+                return entry_price + default_sl_distance, entry_price - default_tp_distance
+        except AttributeError as e:
+            logger.error(f"Config attribute error calculating dynamic SL/TP: {e}")
+            default_sl_distance = 50.0 / 10.0
+            default_tp_distance = 100.0 / 10.0
+            if signal_type == 'BUY':
+                return entry_price - default_sl_distance, entry_price + default_tp_distance
+            else:
+                return entry_price + default_sl_distance, entry_price - default_tp_distance
+        except Exception as e:
+            logger.error(f"Error tidak terduga calculating dynamic SL/TP: {e}")
+            default_sl_distance = 50.0 / 10.0
+            default_tp_distance = 100.0 / 10.0
             if signal_type == 'BUY':
                 return entry_price - default_sl_distance, entry_price + default_tp_distance
             else:
@@ -338,8 +415,52 @@ class RiskManager:
                 logger.debug(f"Daily stats for user {user_id}: {stats}")
                 return stats
                 
-            except (RiskManagerError, Exception) as e:
-                logger.error(f"Error getting daily stats: {e}")
+            except SQLAlchemyError as e:
+                logger.error(f"Database error getting daily stats: {e}")
+                return {
+                    'date': jakarta_time.strftime('%Y-%m-%d'),
+                    'error': f"Database error: {str(e)}",
+                    'total_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'total_pl': 0,
+                    'can_trade': True
+                }
+            except ValueError as e:
+                logger.error(f"Nilai tidak valid getting daily stats: {e}")
+                return {
+                    'date': jakarta_time.strftime('%Y-%m-%d'),
+                    'error': f"Nilai error: {str(e)}",
+                    'total_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'total_pl': 0,
+                    'can_trade': True
+                }
+            except TypeError as e:
+                logger.error(f"Tipe data salah getting daily stats: {e}")
+                return {
+                    'date': jakarta_time.strftime('%Y-%m-%d'),
+                    'error': f"Tipe error: {str(e)}",
+                    'total_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'total_pl': 0,
+                    'can_trade': True
+                }
+            except (ZeroDivisionError, ArithmeticError) as e:
+                logger.error(f"Arithmetic error getting daily stats: {e}")
+                return {
+                    'date': jakarta_time.strftime('%Y-%m-%d'),
+                    'error': f"Kalkulasi error: {str(e)}",
+                    'total_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'total_pl': 0,
+                    'can_trade': True
+                }
+            except Exception as e:
+                logger.error(f"Error tidak terduga getting daily stats: {e}")
                 return {
                     'date': jakarta_time.strftime('%Y-%m-%d'),
                     'error': str(e),
@@ -352,8 +473,8 @@ class RiskManager:
             finally:
                 session.close()
                 
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error in get_daily_stats: {e}")
+        except Exception as e:
+            logger.error(f"Error tidak terduga in get_daily_stats (outer): {e}")
             return {
                 'error': str(e),
                 'total_trades': 0,
@@ -385,8 +506,20 @@ class RiskManager:
             
             return round(pl, 2)
             
-        except (RiskManagerError, Exception) as e:
-            logger.error(f"Error calculating P/L: {e}")
+        except ValueError as e:
+            logger.error(f"Nilai tidak valid calculating P/L: {e}")
+            return 0.0
+        except ZeroDivisionError as e:
+            logger.error(f"Division by zero calculating P/L: {e}")
+            return 0.0
+        except ArithmeticError as e:
+            logger.error(f"Arithmetic error calculating P/L: {e}")
+            return 0.0
+        except AttributeError as e:
+            logger.error(f"Config attribute error calculating P/L: {e}")
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error tidak terduga calculating P/L: {e}")
             return 0.0
     
     def calculate_risk_percentage(self, entry_price: float, stop_loss: float, 

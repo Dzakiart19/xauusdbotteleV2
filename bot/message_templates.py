@@ -2,9 +2,29 @@
 Message Templates untuk Telegram
 Format pesan yang konsisten dan rapi
 """
-from typing import Optional
+from typing import Optional, Union, Any
 from datetime import datetime
 import pytz
+
+
+def _safe_numeric(value: Any, default: Union[int, float] = 0) -> Union[int, float]:
+    """Helper untuk memastikan nilai adalah numeric yang valid"""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_string(value: Any, default: str = 'N/A') -> str:
+    """Helper untuk memastikan nilai adalah string yang valid"""
+    if value is None:
+        return default
+    return str(value) if value else default
+
 
 class MessageFormatter:
     """Helper untuk format pesan Telegram yang rapi"""
@@ -32,35 +52,42 @@ class MessageFormatter:
     @staticmethod
     def signal_alert(signal: dict, signal_source: str = 'auto', config=None) -> str:
         """Format pesan alert sinyal trading - Format Profesional"""
-        signal_type = signal['signal']
+        signal_type = signal.get('signal', 'UNKNOWN')
+        signal_type = _safe_string(signal_type, 'UNKNOWN')
         direction_icon = "🟢" if signal_type == 'BUY' else "🔴"
         
-        entry = signal['entry_price']
-        sl = signal['stop_loss']
-        tp = signal['take_profit']
+        entry = _safe_numeric(signal.get('entry_price', 0), 0)
+        sl = _safe_numeric(signal.get('stop_loss', 0), 0)
+        tp = _safe_numeric(signal.get('take_profit', 0), 0)
         
-        sl_pips = signal.get('sl_pips', 0)
-        tp_pips = signal.get('tp_pips', 0)
-        rr_ratio = signal.get('rr_ratio', 0)
+        sl_pips = _safe_numeric(signal.get('sl_pips', 0), 0)
+        tp_pips = _safe_numeric(signal.get('tp_pips', 0), 0)
+        rr_ratio = _safe_numeric(signal.get('rr_ratio', 0), 0)
         
-        lot_size = signal.get('lot_size', 0.01)
-        risk_percent = signal.get('risk_percent', 1.0)
-        risk_amount = signal.get('risk_amount', 0)
-        account_balance = signal.get('account_balance', 0)
+        lot_size = _safe_numeric(signal.get('lot_size', 0.01), 0.01)
+        risk_percent = _safe_numeric(signal.get('risk_percent', 1.0), 1.0)
+        risk_amount = _safe_numeric(signal.get('risk_amount', 0), 0)
+        account_balance = _safe_numeric(signal.get('account_balance', 0), 0)
         
         if config and account_balance == 0:
-            account_balance = getattr(config, 'ACCOUNT_BALANCE', 0)
+            account_balance = _safe_numeric(getattr(config, 'ACCOUNT_BALANCE', 0), 0)
         if config and risk_percent == 1.0:
-            risk_percent = getattr(config, 'RISK_PER_TRADE_PERCENT', 1.0)
+            risk_percent = _safe_numeric(getattr(config, 'RISK_PER_TRADE_PERCENT', 1.0), 1.0)
         if risk_amount == 0 and account_balance > 0:
             risk_amount = account_balance * risk_percent / 100
         
-        trend_status = signal.get('trend_status', signal.get('trend_description', 'N/A'))
-        momentum_status = signal.get('momentum_status', 'N/A')
-        volume_status = signal.get('volume_status', 'N/A')
-        vwap_status = signal.get('vwap_status', 'N/A')
+        trend_desc = signal.get('trend_description', 'N/A')
+        trend_status_val = signal.get('trend_status')
+        if trend_status_val is not None:
+            trend_status = _safe_string(trend_status_val, 'N/A')
+        else:
+            trend_status = _safe_string(trend_desc, 'N/A')
         
-        timeframe = signal.get('timeframe', 'M1')
+        momentum_status = _safe_string(signal.get('momentum_status'), 'N/A')
+        volume_status = _safe_string(signal.get('volume_status'), 'N/A')
+        vwap_status = _safe_string(signal.get('vwap_status'), 'N/A')
+        
+        timeframe = _safe_string(signal.get('timeframe'), 'M1')
         timestamp = datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')
         
         msg = (
@@ -89,17 +116,21 @@ class MessageFormatter:
     @staticmethod
     def position_update(position_data: dict) -> str:
         """Format update posisi real-time"""
-        signal_type = position_data['signal_type']
+        signal_type = _safe_string(position_data.get('signal_type'), 'UNKNOWN')
         direction_icon = "🟢" if signal_type == 'BUY' else "🔴"
         
-        entry = position_data['entry_price']
-        current = position_data['current_price']
-        sl = position_data['stop_loss']
-        tp = position_data['take_profit']
-        pl = position_data['unrealized_pl']
+        entry = _safe_numeric(position_data.get('entry_price', 0), 0)
+        current = _safe_numeric(position_data.get('current_price', 0), 0)
+        sl = _safe_numeric(position_data.get('stop_loss', 0), 0)
+        tp = _safe_numeric(position_data.get('take_profit', 0), 0)
+        pl = _safe_numeric(position_data.get('unrealized_pl', 0), 0)
         
-        price_change = current - entry
-        price_change_pct = (price_change / entry) * 100
+        if entry == 0:
+            price_change = 0
+            price_change_pct = 0
+        else:
+            price_change = current - entry
+            price_change_pct = (price_change / entry) * 100
         
         if signal_type == 'BUY':
             tp_distance_total = tp - entry
@@ -139,24 +170,25 @@ class MessageFormatter:
     @staticmethod
     def trade_exit(exit_data: dict, pip_value: float = 10.0) -> str:
         """Format pesan trade exit - Format Profesional"""
-        result = exit_data['result']
-        signal_type = exit_data['signal_type']
-        entry = exit_data['entry_price']
-        exit_price = exit_data['exit_price']
-        pl = exit_data['actual_pl']
-        reason = exit_data.get('reason', 'CLOSED')
+        result = _safe_string(exit_data.get('result'), 'UNKNOWN')
+        signal_type = _safe_string(exit_data.get('signal_type'), 'UNKNOWN')
+        entry = _safe_numeric(exit_data.get('entry_price', 0), 0)
+        exit_price = _safe_numeric(exit_data.get('exit_price', 0), 0)
+        pl = _safe_numeric(exit_data.get('actual_pl', 0), 0)
+        reason = _safe_string(exit_data.get('reason'), 'CLOSED')
         duration = exit_data.get('duration', 'N/A')
         
         result_icon = "✅" if result == 'WIN' else "❌"
         result_text = "TP HIT" if reason == 'TP_HIT' else ("SL HIT" if reason in ['SL_HIT', 'DYNAMIC_SL_HIT'] else result)
         
         price_diff = abs(exit_price - entry)
-        pl_pips = price_diff * pip_value
+        pl_pips = price_diff * _safe_numeric(pip_value, 10.0)
         
         pl_emoji = "💰" if pl >= 0 else "📉"
         pl_text = f"+${pl:.2f}" if pl >= 0 else f"-${abs(pl):.2f}"
         
         if isinstance(duration, (int, float)):
+            duration = _safe_numeric(duration, 0)
             hours = int(duration // 3600)
             minutes = int((duration % 3600) // 60)
             if hours > 0:
@@ -195,6 +227,8 @@ class MessageFormatter:
     @staticmethod
     def session_blocked(active_source: str, requested_source: str) -> str:
         """Format pesan ketika sinyal diblok karena ada sesi aktif"""
+        active_source = _safe_string(active_source, 'unknown')
+        requested_source = _safe_string(requested_source, 'unknown')
         active_icon = "🤖" if active_source == 'auto' else "👤"
         requested_icon = "🤖" if requested_source == 'auto' else "👤"
         
@@ -224,11 +258,11 @@ class MessageFormatter:
     @staticmethod
     def statistics_summary(stats: dict) -> str:
         """Format statistik trading - untuk /performa"""
-        total_trades = stats.get('total_trades', 0)
-        wins = stats.get('wins', 0)
-        losses = stats.get('losses', 0)
-        total_profit = stats.get('total_profit', 0)
-        win_rate = stats.get('win_rate', 0)
+        total_trades = _safe_numeric(stats.get('total_trades', 0), 0)
+        wins = _safe_numeric(stats.get('wins', 0), 0)
+        losses = _safe_numeric(stats.get('losses', 0), 0)
+        total_profit = _safe_numeric(stats.get('total_profit', 0), 0)
+        win_rate = _safe_numeric(stats.get('win_rate', 0), 0)
         
         win_rate_emoji = "🔥" if win_rate >= 70 else "💪" if win_rate >= 50 else "📊"
         pl_emoji = "💰" if total_profit >= 0 else "📉"
@@ -237,9 +271,9 @@ class MessageFormatter:
         return (
             f"📊 *Statistik Trading*\n"
             f"{'━' * 22}\n\n"
-            f"📈 *Total Trades:* {total_trades}\n"
-            f"✅ *Wins:* {wins}\n"
-            f"❌ *Losses:* {losses}\n"
+            f"📈 *Total Trades:* {int(total_trades)}\n"
+            f"✅ *Wins:* {int(wins)}\n"
+            f"❌ *Losses:* {int(losses)}\n"
             f"{win_rate_emoji} *Win Rate:* {win_rate:.1f}%\n\n"
             f"{pl_emoji} *Total P/L:* `{pl_text}`\n\n"
             f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d %H:%M WIB')}"
@@ -248,30 +282,39 @@ class MessageFormatter:
     @staticmethod
     def daily_stats(stats: dict) -> str:
         """Format statistik harian - untuk /stats command"""
-        total_trades = stats.get('total_trades', 0)
-        wins = stats.get('wins', 0)
-        losses = stats.get('losses', 0)
-        win_rate = stats.get('win_rate', 0)
-        net_pl = stats.get('total_pl', 0)
+        total_trades = _safe_numeric(stats.get('total_trades', 0), 0)
+        wins = _safe_numeric(stats.get('wins', 0), 0)
+        losses = _safe_numeric(stats.get('losses', 0), 0)
+        win_rate = _safe_numeric(stats.get('win_rate', 0), 0)
+        net_pl = _safe_numeric(stats.get('total_pl', 0), 0)
         profit_factor = stats.get('profit_factor', 'N/A')
         
-        avg_win = stats.get('avg_win', 0)
-        avg_loss = stats.get('avg_loss', 0)
+        avg_win = _safe_numeric(stats.get('avg_win', 0), 0)
+        avg_loss = _safe_numeric(stats.get('avg_loss', 0), 0)
         avg_rr = (avg_win / avg_loss) if avg_loss > 0 else 0
         
         pl_emoji = "💰" if net_pl >= 0 else "📉"
         pl_text = f"+${net_pl:.2f}" if net_pl >= 0 else f"-${abs(net_pl):.2f}"
         
-        profit_factor_str = f"{profit_factor:.2f}" if isinstance(profit_factor, (int, float)) else str(profit_factor)
+        if isinstance(profit_factor, (int, float)):
+            profit_factor_val = _safe_numeric(profit_factor, 0)
+            profit_factor_str = f"{profit_factor_val:.2f}"
+        else:
+            profit_factor_str = _safe_string(profit_factor, 'N/A')
+        
         avg_rr_str = f"1:{avg_rr:.1f}" if avg_rr > 0 else "N/A"
         
-        date_str = stats.get('date', datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d'))
+        date_str = stats.get('date')
+        if date_str is None:
+            date_str = datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d')
+        else:
+            date_str = _safe_string(date_str, datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d'))
         
         return (
             f"📊 *STATISTIK HARI INI*\n"
             f"{'━' * 22}\n"
-            f"📈 Total Trade: {total_trades}\n"
-            f"✅ Win: {wins} | ❌ Loss: {losses}\n"
+            f"📈 Total Trade: {int(total_trades)}\n"
+            f"✅ Win: {int(wins)} | ❌ Loss: {int(losses)}\n"
             f"📊 Win Rate: {win_rate:.1f}%\n"
             f"💰 Net P/L: {pl_emoji} {pl_text}\n"
             f"📈 Profit Factor: {profit_factor_str}\n"
@@ -283,6 +326,9 @@ class MessageFormatter:
     @staticmethod
     def error_message(error_text: str, context: str = "") -> str:
         """Format pesan error"""
+        error_text = _safe_string(error_text, 'Unknown error')
+        context = _safe_string(context, '') if context else ''
+        
         return (
             f"⚠️ *Error*\n"
             f"{'━' * 32}\n\n"

@@ -64,8 +64,8 @@ def validate_chart_data(df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
             return False, f"Kolom yang diperlukan tidak ada: {missing_cols}"
         
         for col in ['open', 'high', 'low', 'close']:
-            if df[col].isnull().any():
-                null_count = df[col].isnull().sum()
+            if bool(df[col].isnull().any()):
+                null_count = int(df[col].isnull().sum())
                 return False, f"Kolom '{col}' mengandung {null_count} nilai null"
             
             if (df[col] <= 0).any():
@@ -168,8 +168,9 @@ class ChartGenerator:
                 return None
             
             elapsed = time.monotonic() - start_time
-            if elapsed > self.chart_timeout * TIMEOUT_WARNING_THRESHOLD:
-                logger.warning(f"⚠️ Persiapan chart sudah menggunakan {elapsed:.2f}s ({(elapsed/self.chart_timeout)*100:.1f}% dari timeout)")
+            chart_timeout_value = self.chart_timeout if self.chart_timeout is not None else FALLBACK_CHART_TIMEOUT
+            if elapsed > chart_timeout_value * TIMEOUT_WARNING_THRESHOLD:
+                logger.warning(f"⚠️ Persiapan chart sudah menggunakan {elapsed:.2f}s ({(elapsed/chart_timeout_value)*100:.1f}% dari timeout)")
             
             addplot = []
             
@@ -189,7 +190,10 @@ class ChartGenerator:
             loss = (-delta.where(delta < 0, 0)).rolling(window=self.config.RSI_PERIOD).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            rsi = rsi.fillna(50)
+            if isinstance(rsi, pd.Series):
+                rsi = rsi.fillna(50)
+            else:
+                rsi = pd.Series([50] * len(df_copy), index=df_copy.index)
             
             addplot.append(mpf.make_addplot(rsi, color='purple', width=1.5, panel=1, ylabel='RSI', ylim=(0, 100)))
             
@@ -200,11 +204,22 @@ class ChartGenerator:
             
             low_min = df_copy['low'].rolling(window=self.config.STOCH_K_PERIOD).min()
             high_max = df_copy['high'].rolling(window=self.config.STOCH_K_PERIOD).max()
-            stoch_k = 100 * (df_copy['close'] - low_min) / (high_max - low_min)
-            stoch_k = stoch_k.rolling(window=self.config.STOCH_SMOOTH_K).mean()
-            stoch_d = stoch_k.rolling(window=self.config.STOCH_D_PERIOD).mean()
-            stoch_k = stoch_k.fillna(50)
-            stoch_d = stoch_d.fillna(50)
+            stoch_k_raw = 100 * (df_copy['close'] - low_min) / (high_max - low_min)
+            if isinstance(stoch_k_raw, pd.Series):
+                stoch_k_smooth = stoch_k_raw.rolling(window=self.config.STOCH_SMOOTH_K).mean()
+                if isinstance(stoch_k_smooth, pd.Series):
+                    stoch_d_raw = stoch_k_smooth.rolling(window=self.config.STOCH_D_PERIOD).mean()
+                    stoch_k = stoch_k_smooth.fillna(50)
+                    if isinstance(stoch_d_raw, pd.Series):
+                        stoch_d = stoch_d_raw.fillna(50)
+                    else:
+                        stoch_d = pd.Series([50] * len(df_copy), index=df_copy.index)
+                else:
+                    stoch_k = pd.Series([50] * len(df_copy), index=df_copy.index)
+                    stoch_d = pd.Series([50] * len(df_copy), index=df_copy.index)
+            else:
+                stoch_k = pd.Series([50] * len(df_copy), index=df_copy.index)
+                stoch_d = pd.Series([50] * len(df_copy), index=df_copy.index)
             
             addplot.append(mpf.make_addplot(stoch_k, color='blue', width=1.5, panel=2, ylabel='Stochastic', ylim=(0, 100)))
             addplot.append(mpf.make_addplot(stoch_d, color='orange', width=1.5, panel=2))
@@ -342,7 +357,7 @@ class ChartGenerator:
         task_id = None
         future = None
         future_id = None
-        effective_timeout = timeout if timeout is not None else self.chart_timeout
+        effective_timeout = timeout if timeout is not None else (self.chart_timeout if self.chart_timeout is not None else FALLBACK_CHART_TIMEOUT)
         start_time = time.monotonic()
         warning_threshold_seconds = effective_timeout * TIMEOUT_WARNING_THRESHOLD
         
@@ -361,10 +376,11 @@ class ChartGenerator:
                 return None
             
             if len(df) > LARGE_DATAFRAME_THRESHOLD:
-                adjusted_timeout = effective_timeout * 1.5
-                logger.info(f"DataFrame besar ({len(df)} baris) - menyesuaikan timeout ke {adjusted_timeout:.1f}s")
-                effective_timeout = adjusted_timeout
-                warning_threshold_seconds = effective_timeout * TIMEOUT_WARNING_THRESHOLD
+                if effective_timeout is not None:
+                    adjusted_timeout = effective_timeout * 1.5
+                    logger.info(f"DataFrame besar ({len(df)} baris) - menyesuaikan timeout ke {adjusted_timeout:.1f}s")
+                    effective_timeout = adjusted_timeout
+                    warning_threshold_seconds = effective_timeout * TIMEOUT_WARNING_THRESHOLD
             
             loop = asyncio.get_running_loop()
             
@@ -391,7 +407,7 @@ class ChartGenerator:
             result = await asyncio.wait_for(future, timeout=effective_timeout)
             
             elapsed_time = time.monotonic() - start_time
-            if elapsed_time > warning_threshold_seconds:
+            if effective_timeout is not None and elapsed_time > warning_threshold_seconds:
                 pct = (elapsed_time / effective_timeout) * 100
                 logger.warning(f"⚠️ Pembuatan chart memakan waktu {elapsed_time:.2f}s ({pct:.1f}% dari {effective_timeout}s timeout) - pertimbangkan optimasi atau tingkatkan timeout")
             

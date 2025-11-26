@@ -32,7 +32,7 @@ LOCK_ACQUIRE_TIMEOUT = 3  # Timeout untuk acquire lock
 DST_AMBIGUOUS_RESOLUTION = 'earlier'  # Resolusi untuk waktu DST ambigu (earlier/later)
 
 
-def _safe_localize(tz, dt: datetime, is_dst: bool = None) -> datetime:
+def _safe_localize(tz, dt: datetime, is_dst: Optional[bool] = None) -> datetime:
     """
     Localize datetime dengan handling DST yang aman.
     
@@ -477,7 +477,11 @@ class ScheduledTask:
                     def _done_callback(t: asyncio.Task):
                         try:
                             on_complete(t, self.name)
-                        except (TaskSchedulerError, Exception) as cb_err:
+                        except (ValueError, TypeError) as cb_err:
+                            logger.error(f"Completion callback validation error for {self.name}: {cb_err}")
+                        except RuntimeError as cb_err:
+                            logger.error(f"Completion callback runtime error for {self.name}: {cb_err}")
+                        except Exception as cb_err:
                             logger.error(f"Completion callback error for {self.name}: {cb_err}")
                     self.current_execution_task.add_done_callback(_done_callback)
                 
@@ -528,7 +532,29 @@ class ScheduledTask:
             
             self._check_auto_disable(alert_system)
             
-        except (TaskSchedulerError, Exception) as e:
+        except (ValueError, TypeError) as e:
+            self.error_count += 1
+            self.consecutive_failures += 1
+            self._last_exception = e
+            self._record_exception(e)
+            self._health_metrics.total_runs += 1
+            self._health_metrics.failed_runs += 1
+            self._calculate_next_run()
+            logger.error(f"Validation error executing task {self.name}: {e} (Consecutive failures: {self.consecutive_failures})")
+            self._check_auto_disable(alert_system)
+            
+        except RuntimeError as e:
+            self.error_count += 1
+            self.consecutive_failures += 1
+            self._last_exception = e
+            self._record_exception(e)
+            self._health_metrics.total_runs += 1
+            self._health_metrics.failed_runs += 1
+            self._calculate_next_run()
+            logger.error(f"Runtime error executing task {self.name}: {e} (Consecutive failures: {self.consecutive_failures})")
+            self._check_auto_disable(alert_system)
+            
+        except Exception as e:
             self.error_count += 1
             self.consecutive_failures += 1
             self._last_exception = e
@@ -552,8 +578,14 @@ class ScheduledTask:
                         await asyncio.wait_for(alert_task, timeout=10)
                     except asyncio.TimeoutError:
                         logger.warning(f"Alert task for {self.name} timed out")
+                    except asyncio.CancelledError:
+                        raise
                     logger.warning(f"Alert sent: Task {self.name} has {self.consecutive_failures} consecutive failures")
-                except (TaskSchedulerError, Exception) as alert_error:
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError as alert_error:
+                    logger.error(f"Timeout sending task failure alert: {alert_error}")
+                except Exception as alert_error:
                     logger.error(f"Failed to send task failure alert: {alert_error}")
             
             self._check_auto_disable(alert_system)
@@ -582,7 +614,9 @@ class ScheduledTask:
                             f"Last error: {self._last_exception}"
                         )
                     )
-                except (TaskSchedulerError, Exception) as e:
+                except RuntimeError as e:
+                    logger.error(f"Runtime error sending auto-disable alert: {e}")
+                except Exception as e:
                     logger.error(f"Failed to send auto-disable alert: {e}")
     
     def get_last_exception(self) -> Optional[Exception]:
@@ -667,7 +701,7 @@ class TaskScheduler:
         self._active_task_executions: Set[asyncio.Task] = set()
         self._all_created_tasks: Set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
-        self._task_exceptions: Dict[str, Exception] = {}
+        self._task_exceptions: Dict[str, BaseException] = {}
         self._exception_history: deque = deque(maxlen=100)
         self._completion_event = asyncio.Event()
         self._cleanup_interval = cleanup_interval
@@ -701,7 +735,11 @@ class TaskScheduler:
             except asyncio.CancelledError:
                 pass
                 
-        except (TaskSchedulerError, Exception) as e:
+        except (ValueError, TypeError) as e:
+            logger.error(f"Validation error in task done callback for {task_name}: {e}")
+        except RuntimeError as e:
+            logger.error(f"Runtime error in task done callback for {task_name}: {e}")
+        except Exception as e:
             logger.error(f"Error in task done callback for {task_name}: {e}")
     
     def add_task(self, name: str, func: Callable, interval: Optional[int] = None,
@@ -1243,12 +1281,17 @@ class TaskScheduler:
                         except asyncio.TimeoutError:
                             consecutive_errors += 1
                             logger.warning(f"Aggressive cleanup timeout, consecutive errors: {consecutive_errors}")
-                            # Coba fallback cleanup sederhana
                             await self._emergency_cleanup()
-                        except (TaskSchedulerError, Exception) as e:
+                        except asyncio.CancelledError:
+                            logger.info("Aggressive cleanup dibatalkan")
+                            raise
+                        except RuntimeError as e:
+                            consecutive_errors += 1
+                            logger.error(f"Runtime error saat cleanup: {e}, consecutive errors: {consecutive_errors}")
+                            await self._emergency_cleanup()
+                        except Exception as e:
                             consecutive_errors += 1
                             logger.error(f"Error saat cleanup: {e}, consecutive errors: {consecutive_errors}")
-                            # Coba fallback cleanup sederhana
                             await self._emergency_cleanup()
                         
                         # Jika terlalu banyak error berturut-turut, kurangi frekuensi cleanup
@@ -1912,16 +1955,36 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
                 
                 session.commit()
                 logger.info(f"Deleted {old_trades} old trade records")
-            except (TaskSchedulerError, Exception) as e:
+            except (ValueError, TypeError) as e:
+                logger.error(f"Validation error cleaning database: {e}")
+                try:
+                    session.rollback()
+                except RuntimeError as rollback_error:
+                    logger.error(f"Runtime error during rollback: {rollback_error}")
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
+            except RuntimeError as e:
+                logger.error(f"Runtime error cleaning database: {e}")
+                try:
+                    session.rollback()
+                except RuntimeError as rollback_error:
+                    logger.error(f"Runtime error during rollback: {rollback_error}")
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
+            except Exception as e:
                 logger.error(f"Error cleaning database: {e}")
                 try:
                     session.rollback()
-                except (TaskSchedulerError, Exception) as rollback_error:
+                except RuntimeError as rollback_error:
+                    logger.error(f"Runtime error during rollback: {rollback_error}")
+                except Exception as rollback_error:
                     logger.error(f"Error during rollback: {rollback_error}")
             finally:
                 try:
                     session.close()
-                except (TaskSchedulerError, Exception) as close_error:
+                except RuntimeError as close_error:
+                    logger.error(f"Runtime error closing session: {close_error}")
+                except Exception as close_error:
                     logger.error(f"Error closing session: {close_error}")
     
     async def health_check():
@@ -1959,7 +2022,15 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
             try:
                 await market_data.save_candles_to_db(db_manager)
                 market_data._prune_old_candles(db_manager, keep_count=150)
-            except (TaskSchedulerError, Exception) as e:
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError as e:
+                logger.error(f"Timeout in periodic candle save: {e}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"Validation error in periodic candle save: {e}")
+            except RuntimeError as e:
+                logger.error(f"Runtime error in periodic candle save: {e}")
+            except Exception as e:
                 logger.error(f"Error in periodic candle save: {e}")
     
     scheduler.add_interval_task(
@@ -1997,12 +2068,16 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
                                 os.remove(file_path)
                                 deleted_count += 1
                                 logger.debug(f"Deleted chart: {f} (age: {age:.1f}min)")
-                            except (TaskSchedulerError, Exception) as e:
+                            except OSError as e:
+                                logger.warning(f"OS error deleting chart {f}: {e}")
+                            except Exception as e:
                                 logger.warning(f"Failed to delete chart {f}: {e}")
                     
                     if deleted_count > 0:
                         logger.info(f"Aggressive cleanup: removed {deleted_count} old charts")
-            except (TaskSchedulerError, Exception) as e:
+            except OSError as e:
+                logger.error(f"OS error in aggressive chart cleanup: {e}")
+            except Exception as e:
                 logger.error(f"Error in aggressive chart cleanup: {e}")
     
     scheduler.add_interval_task(

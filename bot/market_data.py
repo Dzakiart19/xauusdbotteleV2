@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import websockets
 import json
 import math
@@ -135,6 +136,19 @@ def validate_ohlc_integrity(open_val: float, high_val: float, low_val: float, cl
 
 
 class OHLCBuilder:
+    """Builder untuk membangun candle OHLC dari tick data secara real-time.
+    
+    Hybrid threading/asyncio pattern:
+    - threading.Lock digunakan untuk operasi sync (add_tick, get_dataframe, clear)
+    - asyncio.Lock tersedia untuk operasi async jika diperlukan di masa depan
+    - Ini memungkinkan OHLCBuilder dipanggil dari sync dan async context
+    
+    Thread-safety:
+    - _tick_lock: Melindungi akses ke candle data (sync operations)
+    - _callback_lock: Melindungi akses ke callback list (sync operations)
+    - Kedua lock menggunakan threading.Lock karena dipanggil dari sync context
+    """
+    
     def __init__(self, timeframe_minutes: int = 1):
         if timeframe_minutes <= 0:
             raise ValueError(f"Invalid timeframe_minutes: {timeframe_minutes}. Must be > 0")
@@ -149,11 +163,12 @@ class OHLCBuilder:
         self.last_completed_candle_timestamp: Optional[datetime] = None
         self.candle_close_callbacks: List[Callable] = []
         
-        import threading
         self._tick_lock = threading.Lock()
         self._callback_lock = threading.Lock()
         
-        logger.debug(f"OHLCBuilder diinisialisasi untuk M{timeframe_minutes} dengan thread locks")
+        self._async_lock: Optional[asyncio.Lock] = None
+        
+        logger.debug(f"OHLCBuilder diinisialisasi untuk M{timeframe_minutes} dengan hybrid threading/asyncio locks")
     
     def _scrub_nan_prices(self, prices: Dict) -> Tuple[bool, Dict]:
         """Scrub NaN values from price dictionary at builder boundary
@@ -185,6 +200,19 @@ class OHLCBuilder:
             scrubbed['timestamp'] = prices['timestamp']
         
         return True, scrubbed
+    
+    def _get_async_lock(self) -> asyncio.Lock:
+        """Lazy initialization of asyncio.Lock for async operations.
+        
+        Ini diperlukan karena asyncio.Lock() hanya bisa dibuat dalam event loop context.
+        Lock diinisialisasi saat pertama kali dibutuhkan dalam async context.
+        
+        Returns:
+            asyncio.Lock instance untuk operasi async
+        """
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
         
     def _validate_tick_data(self, bid: float, ask: float, timestamp: datetime) -> Tuple[bool, Optional[str]]:
         """Validate tick data before processing with NaN check"""
@@ -223,9 +251,17 @@ class OHLCBuilder:
             return False, f"Validation error: {str(e)}"
         
     def add_tick(self, bid: float, ask: float, timestamp: datetime):
-        """Menambahkan tick data dengan validasi, NaN scrubbing, dan thread-safety
+        """Menambahkan tick data dengan validasi, NaN scrubbing, dan thread-safety.
         
-        Menggunakan _tick_lock untuk proteksi race condition pada concurrent tick processing.
+        Hybrid Pattern Note:
+        - Method ini sync dan menggunakan threading.Lock (_tick_lock)
+        - Dipanggil dari sync context (WebSocket handler, simulator)
+        - Thread-safe untuk concurrent tick processing dari multiple sources
+        
+        Args:
+            bid: Harga bid
+            ask: Harga ask  
+            timestamp: Waktu tick
         """
         is_valid, error_msg = self._validate_tick_data(bid, ask, timestamp)
         if not is_valid:
@@ -306,9 +342,18 @@ class OHLCBuilder:
                 logger.debug(f"Tick data: bid={bid}, ask={ask}, timestamp={timestamp}")
         
     def get_dataframe(self, limit: int = 100) -> Optional[pd.DataFrame]:
-        """Mendapatkan DataFrame dengan validasi, NaN filtering, OHLC integrity check, dan thread-safety
+        """Mendapatkan DataFrame dengan validasi, NaN filtering, OHLC integrity check.
         
-        Menggunakan _tick_lock untuk proteksi thread-safety saat mengakses candle data.
+        Hybrid Pattern Note:
+        - Method ini sync dan menggunakan threading.Lock (_tick_lock)
+        - Untuk async context, gunakan get_dataframe_async() sebagai gantinya
+        - Thread-safe untuk akses concurrent ke candle data
+        
+        Args:
+            limit: Jumlah maksimum candle yang dikembalikan (default: 100)
+            
+        Returns:
+            DataFrame dengan data OHLC atau None jika tidak ada data
         """
         try:
             if limit <= 0:
@@ -379,6 +424,22 @@ class OHLCBuilder:
         except Exception as e:
             logger.error(f"Error membuat DataFrame untuk M{self.timeframe_minutes}: {e}")
             return None
+    
+    async def get_dataframe_async(self, limit: int = 100) -> Optional[pd.DataFrame]:
+        """Async version of get_dataframe untuk digunakan dalam async context.
+        
+        Menggunakan asyncio.Lock untuk proteksi async-safe saat mengakses candle data.
+        Operasi berat dilakukan di thread pool untuk menghindari blocking event loop.
+        
+        Args:
+            limit: Jumlah maksimum candle yang dikembalikan (default: 100)
+            
+        Returns:
+            DataFrame dengan data OHLC atau None jika tidak ada data
+        """
+        async with self._get_async_lock():
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self.get_dataframe, limit)
     
     def clear(self):
         """Membersihkan semua candle dan reset state builder (untuk reload dari DB dengan aman)

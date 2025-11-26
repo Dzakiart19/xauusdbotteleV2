@@ -622,10 +622,13 @@ class TradingStrategy:
             return False
     
     def check_trend_filter(self, indicators: Dict) -> Tuple[bool, str, str]:
-        """Check trend filter conditions for multi-confirmation strategy
+        """Check trend filter conditions - RELAXED VERSION for ranging market
         
-        BUY: EMA5 > EMA20 > EMA50 AND close > EMA50
-        SELL: EMA5 < EMA20 < EMA50 AND close < EMA50
+        PERBAIKAN untuk kondisi market ranging:
+        - Tier 1: Perfect EMA alignment (EMA5 > EMA20 > EMA50 atau sebaliknya)
+        - Tier 2: Partial alignment (close vs EMA50 + momentum direction)
+        - Tier 3: MACD/RSI momentum confirmation sebagai fallback
+        - Tier 4: TRF atau CEREBR bias sebagai alternatif
         
         Args:
             indicators: Dictionary of calculated indicators
@@ -658,35 +661,97 @@ class TradingStrategy:
             bearish_price_below_ema50 = close < ema_50
             
             if bullish_ema_alignment and bullish_price_above_ema50:
-                reason = f"✅ Trend Filter PASSED (BUY): EMA5({ema_5:.2f}) > EMA20({ema_20:.2f}) > EMA50({ema_50:.2f}), Close({close:.2f}) > EMA50"
+                reason = f"✅ Trend Filter PASSED [Tier 1 BUY]: EMA5({ema_5:.2f}) > EMA20({ema_20:.2f}) > EMA50({ema_50:.2f}), Close({close:.2f}) > EMA50"
                 logger.info(reason)
                 return True, 'BUY', reason
             elif bearish_ema_alignment and bearish_price_below_ema50:
-                reason = f"✅ Trend Filter PASSED (SELL): EMA5({ema_5:.2f}) < EMA20({ema_20:.2f}) < EMA50({ema_50:.2f}), Close({close:.2f}) < EMA50"
+                reason = f"✅ Trend Filter PASSED [Tier 1 SELL]: EMA5({ema_5:.2f}) < EMA20({ema_20:.2f}) < EMA50({ema_50:.2f}), Close({close:.2f}) < EMA50"
                 logger.info(reason)
                 return True, 'SELL', reason
-            else:
-                if not bullish_ema_alignment and not bearish_ema_alignment:
-                    reason = f"❌ Trend Filter FAILED: EMA alignment not aligned - EMA5({ema_5:.2f}), EMA20({ema_20:.2f}), EMA50({ema_50:.2f})"
-                elif bullish_ema_alignment and not bullish_price_above_ema50:
-                    reason = f"❌ Trend Filter FAILED: Bullish EMA but Close({close:.2f}) not above EMA50({ema_50:.2f})"
-                elif bearish_ema_alignment and not bearish_price_below_ema50:
-                    reason = f"❌ Trend Filter FAILED: Bearish EMA but Close({close:.2f}) not below EMA50({ema_50:.2f})"
-                else:
-                    reason = "❌ Trend Filter FAILED: No clear trend direction"
-                logger.debug(reason)
-                return False, '', reason
+            
+            bullish_partial = (ema_5 > ema_20 and close > ema_50)
+            bearish_partial = (ema_5 < ema_20 and close < ema_50)
+            
+            if bullish_partial:
+                reason = f"✅ Trend Filter PASSED [Tier 2 BUY]: EMA5({ema_5:.2f}) > EMA20({ema_20:.2f}), Close({close:.2f}) > EMA50({ema_50:.2f})"
+                logger.info(reason)
+                return True, 'BUY', reason
+            elif bearish_partial:
+                reason = f"✅ Trend Filter PASSED [Tier 2 SELL]: EMA5({ema_5:.2f}) < EMA20({ema_20:.2f}), Close({close:.2f}) < EMA50({ema_50:.2f})"
+                logger.info(reason)
+                return True, 'SELL', reason
+            
+            macd = indicators.get('macd')
+            macd_signal = indicators.get('macd_signal')
+            macd_histogram = indicators.get('macd_histogram')
+            rsi = indicators.get('rsi')
+            
+            if is_valid_number(macd) and is_valid_number(macd_signal):
+                macd_val = safe_float(macd, 0.0)
+                macd_signal_val = safe_float(macd_signal, 0.0)
+                
+                if close > ema_50 and macd_val > macd_signal_val:
+                    reason = f"✅ Trend Filter PASSED [Tier 3 BUY]: Close({close:.2f}) > EMA50, MACD bullish crossover"
+                    logger.info(reason)
+                    return True, 'BUY', reason
+                elif close < ema_50 and macd_val < macd_signal_val:
+                    reason = f"✅ Trend Filter PASSED [Tier 3 SELL]: Close({close:.2f}) < EMA50, MACD bearish crossover"
+                    logger.info(reason)
+                    return True, 'SELL', reason
+            
+            if is_valid_number(rsi):
+                rsi_val = safe_float(rsi, 50.0)
+                
+                if close > ema_50 and rsi_val > 50:
+                    reason = f"✅ Trend Filter PASSED [Tier 3 BUY]: Close({close:.2f}) > EMA50, RSI({rsi_val:.1f}) bullish"
+                    logger.info(reason)
+                    return True, 'BUY', reason
+                elif close < ema_50 and rsi_val < 50:
+                    reason = f"✅ Trend Filter PASSED [Tier 3 SELL]: Close({close:.2f}) < EMA50, RSI({rsi_val:.1f}) bearish"
+                    logger.info(reason)
+                    return True, 'SELL', reason
+            
+            trf_trend = indicators.get('trf_trend')
+            cerebr_bias = indicators.get('cerebr_bias')
+            
+            if is_valid_number(trf_trend):
+                trf = int(safe_float(trf_trend, 0))
+                if trf == 1 and close > ema_50:
+                    reason = f"✅ Trend Filter PASSED [Tier 4 BUY]: TRF bullish trend, Close({close:.2f}) > EMA50"
+                    logger.info(reason)
+                    return True, 'BUY', reason
+                elif trf == -1 and close < ema_50:
+                    reason = f"✅ Trend Filter PASSED [Tier 4 SELL]: TRF bearish trend, Close({close:.2f}) < EMA50"
+                    logger.info(reason)
+                    return True, 'SELL', reason
+            
+            if is_valid_number(cerebr_bias):
+                bias = int(safe_float(cerebr_bias, 0))
+                if bias == 1 and close > ema_50:
+                    reason = f"✅ Trend Filter PASSED [Tier 4 BUY]: CEREBR bullish bias, Close({close:.2f}) > EMA50"
+                    logger.info(reason)
+                    return True, 'BUY', reason
+                elif bias == -1 and close < ema_50:
+                    reason = f"✅ Trend Filter PASSED [Tier 4 SELL]: CEREBR bearish bias, Close({close:.2f}) < EMA50"
+                    logger.info(reason)
+                    return True, 'SELL', reason
+            
+            reason = f"❌ Trend Filter FAILED: No clear trend direction - EMA5({ema_5:.2f}), EMA20({ema_20:.2f}), EMA50({ema_50:.2f}), Close({close:.2f})"
+            logger.debug(reason)
+            return False, '', reason
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_trend_filter: {e}")
             return False, '', f"Error: {str(e)}"
     
     def check_momentum_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
-        """Check momentum filter conditions
+        """Check momentum filter conditions - RELAXED VERSION
         
-        - RSI 14 must be between config.RSI_ENTRY_MIN (35) and config.RSI_ENTRY_MAX (65)
-        - RSI direction must match trend (BUY: RSI > 50, SELL: RSI < 50)
-        - Stochastic K cross D in middle area (not in extreme overbought/oversold)
+        PERBAIKAN:
+        - RSI range diperluas ke [25-75] (sebelumnya [35-65])
+        - RSI direction lebih lenient: BUY RSI > 45, SELL RSI < 55
+        - Accept neutral zone [40-60] jika Trend Filter sudah PASS
+        - Stochastic hanya sebagai bonus, bukan blocking
         
         Args:
             indicators: Dictionary of calculated indicators
@@ -707,8 +772,9 @@ class TradingStrategy:
                 return False, "❌ Momentum Filter FAILED: Invalid RSI value"
             
             rsi = safe_float(rsi, 50.0)
-            rsi_entry_min = safe_float(self.config.RSI_ENTRY_MIN, 35.0)
-            rsi_entry_max = safe_float(self.config.RSI_ENTRY_MAX, 65.0)
+            
+            rsi_entry_min = 25.0
+            rsi_entry_max = 75.0
             
             rsi_in_range = rsi_entry_min <= rsi <= rsi_entry_max
             if not rsi_in_range:
@@ -717,17 +783,18 @@ class TradingStrategy:
                 return False, reason
             
             rsi_direction_valid = False
+            neutral_zone = 40 <= rsi <= 60
+            
             if signal_type == 'BUY':
-                rsi_direction_valid = rsi > 50
+                rsi_direction_valid = rsi >= 45 or neutral_zone
             elif signal_type == 'SELL':
-                rsi_direction_valid = rsi < 50
+                rsi_direction_valid = rsi <= 55 or neutral_zone
             
             if not rsi_direction_valid:
                 reason = f"❌ Momentum Filter FAILED: RSI({rsi:.1f}) direction mismatch for {signal_type}"
                 logger.debug(reason)
                 return False, reason
             
-            stoch_confirmation = True
             stoch_reason = ""
             
             if all([is_valid_number(stoch_k), is_valid_number(stoch_d), 
@@ -737,32 +804,23 @@ class TradingStrategy:
                 stoch_k_prev = safe_float(stoch_k_prev, 50.0)
                 stoch_d_prev = safe_float(stoch_d_prev, 50.0)
                 
-                stoch_oversold = safe_float(self.config.STOCH_OVERSOLD_LEVEL, 20.0)
-                stoch_overbought = safe_float(self.config.STOCH_OVERBOUGHT_LEVEL, 80.0)
-                
-                is_extreme = stoch_k < stoch_oversold or stoch_k > stoch_overbought
-                
                 if signal_type == 'BUY':
                     stoch_cross = stoch_k_prev < stoch_d_prev and stoch_k >= stoch_d
-                    if stoch_cross and not is_extreme:
-                        stoch_reason = f", Stoch K({stoch_k:.1f}) crossed above D({stoch_d:.1f})"
-                    elif is_extreme:
-                        stoch_confirmation = False
-                        stoch_reason = f", ⚠️ Stoch in extreme zone ({stoch_k:.1f})"
+                    stoch_favorable = stoch_k > stoch_d or stoch_k < 70
+                    if stoch_cross:
+                        stoch_reason = f", Stoch K({stoch_k:.1f}) crossed above D({stoch_d:.1f}) 🎯"
+                    elif stoch_favorable:
+                        stoch_reason = f", Stoch favorable({stoch_k:.1f})"
                 elif signal_type == 'SELL':
                     stoch_cross = stoch_k_prev > stoch_d_prev and stoch_k <= stoch_d
-                    if stoch_cross and not is_extreme:
-                        stoch_reason = f", Stoch K({stoch_k:.1f}) crossed below D({stoch_d:.1f})"
-                    elif is_extreme:
-                        stoch_confirmation = False
-                        stoch_reason = f", ⚠️ Stoch in extreme zone ({stoch_k:.1f})"
+                    stoch_favorable = stoch_k < stoch_d or stoch_k > 30
+                    if stoch_cross:
+                        stoch_reason = f", Stoch K({stoch_k:.1f}) crossed below D({stoch_d:.1f}) 🎯"
+                    elif stoch_favorable:
+                        stoch_reason = f", Stoch favorable({stoch_k:.1f})"
             
-            if not stoch_confirmation:
-                reason = f"❌ Momentum Filter FAILED: Stochastic in extreme zone for {signal_type}{stoch_reason}"
-                logger.debug(reason)
-                return False, reason
-            
-            reason = f"✅ Momentum Filter PASSED: RSI({rsi:.1f}) in range [{rsi_entry_min}-{rsi_entry_max}], direction matches {signal_type}{stoch_reason}"
+            direction_info = "neutral zone ✅" if neutral_zone else f"direction matches {signal_type}"
+            reason = f"✅ Momentum Filter PASSED: RSI({rsi:.1f}) in range [{rsi_entry_min}-{rsi_entry_max}], {direction_info}{stoch_reason}"
             logger.info(reason)
             return True, reason
             
@@ -771,11 +829,13 @@ class TradingStrategy:
             return False, f"Error: {str(e)}"
     
     def check_volume_vwap_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
-        """Check volume and VWAP filter conditions
+        """Check volume and VWAP filter conditions - RELAXED VERSION
         
-        - Volume must be > volume_avg
-        - BUY: close > VWAP
-        - SELL: close < VWAP
+        PERBAIKAN:
+        - Volume threshold diturunkan ke 80% dari average (sebelumnya 100%)
+        - VWAP alignment bersifat opsional, bukan blocking
+        - Accept jika volume >= 50% average DAN VWAP aligned
+        - Low volume market XAUUSD dapat tetap qualify
         
         Args:
             indicators: Dictionary of calculated indicators
@@ -792,56 +852,81 @@ class TradingStrategy:
             
             volume_valid = is_valid_number(volume) and is_valid_number(volume_avg)
             if not volume_valid:
-                reason = "❌ Volume/VWAP Filter FAILED: Invalid volume data"
-                logger.debug(reason)
-                return False, reason
+                reason = "✅ Volume/VWAP Filter PASSED: Volume data not available (skip check)"
+                logger.info(reason)
+                return True, reason
             
             volume = safe_float(volume, 0.0)
             volume_avg = safe_float(volume_avg, 0.0)
             
             if volume_avg <= 0:
-                reason = "❌ Volume/VWAP Filter FAILED: Volume average is zero or negative"
-                logger.debug(reason)
-                return False, reason
-            
-            volume_strong = volume > volume_avg
-            if not volume_strong:
-                reason = f"❌ Volume/VWAP Filter FAILED: Volume({volume:.0f}) not > Volume Avg({volume_avg:.0f})"
-                logger.debug(reason)
-                return False, reason
-            
-            if is_valid_number(vwap) and is_valid_number(close):
-                close = safe_float(close, 0.0)
-                vwap = safe_float(vwap, 0.0)
-                
-                if signal_type == 'BUY' and close <= vwap:
-                    reason = f"❌ Volume/VWAP Filter FAILED: Close({close:.2f}) not > VWAP({vwap:.2f}) for BUY"
-                    logger.debug(reason)
-                    return False, reason
-                elif signal_type == 'SELL' and close >= vwap:
-                    reason = f"❌ Volume/VWAP Filter FAILED: Close({close:.2f}) not < VWAP({vwap:.2f}) for SELL"
-                    logger.debug(reason)
-                    return False, reason
-                
-                vwap_info = f", Close({close:.2f}) vs VWAP({vwap:.2f})"
-            else:
-                vwap_info = " (VWAP not available)"
+                reason = "✅ Volume/VWAP Filter PASSED: Volume average not available (skip check)"
+                logger.info(reason)
+                return True, reason
             
             volume_ratio = safe_divide(volume, volume_avg, 1.0, "volume_ratio")
-            reason = f"✅ Volume/VWAP Filter PASSED: Volume({volume:.0f}) > Avg({volume_avg:.0f}) [{volume_ratio:.1f}x]{vwap_info}"
-            logger.info(reason)
-            return True, reason
+            
+            volume_threshold_low = 0.50
+            volume_threshold_standard = 0.80
+            
+            volume_acceptable = volume_ratio >= volume_threshold_low
+            volume_strong = volume_ratio >= volume_threshold_standard
+            
+            vwap_aligned = False
+            vwap_info = ""
+            
+            if is_valid_number(vwap) and is_valid_number(close):
+                close_val = safe_float(close, 0.0)
+                vwap_val = safe_float(vwap, 0.0)
+                
+                if vwap_val > 0:
+                    vwap_tolerance = vwap_val * 0.002
+                    
+                    if signal_type == 'BUY':
+                        vwap_aligned = close_val >= (vwap_val - vwap_tolerance)
+                    elif signal_type == 'SELL':
+                        vwap_aligned = close_val <= (vwap_val + vwap_tolerance)
+                    
+                    vwap_status = "aligned ✅" if vwap_aligned else "not aligned"
+                    vwap_info = f", VWAP({vwap_val:.2f}) {vwap_status}"
+                else:
+                    vwap_aligned = True
+                    vwap_info = " (VWAP not available, skipped)"
+            else:
+                vwap_aligned = True
+                vwap_info = " (VWAP not available, skipped)"
+            
+            if volume_strong:
+                reason = f"✅ Volume/VWAP Filter PASSED: Volume strong [{volume_ratio:.1%}]{vwap_info}"
+                logger.info(reason)
+                return True, reason
+            elif volume_acceptable and vwap_aligned:
+                reason = f"✅ Volume/VWAP Filter PASSED: Volume acceptable [{volume_ratio:.1%}] + VWAP aligned{vwap_info}"
+                logger.info(reason)
+                return True, reason
+            elif volume_acceptable:
+                reason = f"✅ Volume/VWAP Filter PASSED: Volume acceptable [{volume_ratio:.1%}]{vwap_info}"
+                logger.info(reason)
+                return True, reason
+            else:
+                reason = f"❌ Volume/VWAP Filter FAILED: Volume too low [{volume_ratio:.1%}] < {volume_threshold_low:.0%} minimum"
+                logger.debug(reason)
+                return False, reason
             
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_volume_vwap_filter: {e}")
             return False, f"Error: {str(e)}"
     
     def check_price_action_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str, int]:
-        """Check price action confirmation (MANDATORY filter)
+        """Check price action confirmation - RELAXED 2-TIER VERSION
         
-        For signal to pass, MUST have at least one of:
-        - BUY: bullish pattern (bullish_pinbar, hammer, bullish_engulfing) OR near support
-        - SELL: bearish pattern (bearish_pinbar, inverted_hammer, bearish_engulfing) OR near resistance
+        PERBAIKAN dengan 2-TIER LOGIC:
+        - Tier 1: Candlestick pattern ATAU S/R proximity (tidak harus keduanya)
+        - Tier 2: Last 3 candles menunjukkan consistent direction
+        - Tier 3: MACD histogram direction sesuai signal
+        - Tier 4: EMA spacing menunjukkan momentum yang baik
+        
+        Salah satu tier PASS = Filter PASSED
         
         Args:
             indicators: Dictionary of calculated indicators
@@ -849,8 +934,8 @@ class TradingStrategy:
             
         Returns:
             Tuple of (passed, reason, points)
-            - passed: True if price action confirmation found (REQUIRED for signal)
-            - reason: Description of confirmations or failure
+            - passed: True if ANY tier confirmation found
+            - reason: Description of confirmations
             - points: Score (15 when passed, 0 when failed)
         """
         try:
@@ -880,6 +965,11 @@ class TradingStrategy:
                         confirmations.append("Bearish Engulfing")
                         confidence_boost += 7
             
+            if confirmations:
+                reason = f"✅ Price Action Filter PASSED [Tier 1]: {', '.join(confirmations)}"
+                logger.info(reason)
+                return True, reason, 15
+            
             sr_levels = indicators.get('support_resistance', {})
             close = safe_float(indicators.get('close', 0.0), 0.0)
             atr = safe_float(indicators.get('atr', 1.0), 1.0)
@@ -888,32 +978,151 @@ class TradingStrategy:
                 nearest_support = sr_levels.get('nearest_support', 0.0)
                 nearest_resistance = sr_levels.get('nearest_resistance', 0.0)
                 
-                proximity_threshold = atr * 0.5
+                proximity_threshold = atr * 1.0
                 
                 if signal_type == 'BUY' and nearest_support > 0:
                     if abs(close - nearest_support) <= proximity_threshold:
                         confirmations.append(f"Near Support({nearest_support:.2f})")
-                        confidence_boost += 5
+                        reason = f"✅ Price Action Filter PASSED [Tier 1]: Near Support level"
+                        logger.info(reason)
+                        return True, reason, 15
                 elif signal_type == 'SELL' and nearest_resistance > 0:
                     if abs(close - nearest_resistance) <= proximity_threshold:
                         confirmations.append(f"Near Resistance({nearest_resistance:.2f})")
-                        confidence_boost += 5
+                        reason = f"✅ Price Action Filter PASSED [Tier 1]: Near Resistance level"
+                        logger.info(reason)
+                        return True, reason, 15
             
-            if confirmations:
-                reason = f"✅ Price Action Filter PASSED: {', '.join(confirmations)}"
-                logger.info(reason)
-                return True, reason, 15
-            else:
-                reason = "❌ Price Action Filter FAILED: No candlestick pattern or S/R proximity detected"
-                logger.info(reason)
-                return False, reason, 0
+            macd_histogram = indicators.get('macd_histogram')
+            macd = indicators.get('macd')
+            macd_signal = indicators.get('macd_signal')
+            
+            if is_valid_number(macd_histogram):
+                histogram = safe_float(macd_histogram, 0.0)
+                if signal_type == 'BUY' and histogram > 0:
+                    reason = f"✅ Price Action Filter PASSED [Tier 2]: MACD Histogram bullish ({histogram:.4f})"
+                    logger.info(reason)
+                    return True, reason, 15
+                elif signal_type == 'SELL' and histogram < 0:
+                    reason = f"✅ Price Action Filter PASSED [Tier 2]: MACD Histogram bearish ({histogram:.4f})"
+                    logger.info(reason)
+                    return True, reason, 15
+            
+            if is_valid_number(macd) and is_valid_number(macd_signal):
+                macd_val = safe_float(macd, 0.0)
+                signal_val = safe_float(macd_signal, 0.0)
+                
+                if signal_type == 'BUY' and macd_val > signal_val:
+                    reason = f"✅ Price Action Filter PASSED [Tier 2]: MACD above signal line"
+                    logger.info(reason)
+                    return True, reason, 15
+                elif signal_type == 'SELL' and macd_val < signal_val:
+                    reason = f"✅ Price Action Filter PASSED [Tier 2]: MACD below signal line"
+                    logger.info(reason)
+                    return True, reason, 15
+            
+            ema_5 = indicators.get(f'ema_{self.config.EMA_PERIODS[0]}')
+            ema_20 = indicators.get(f'ema_{self.config.EMA_PERIODS[1]}')
+            ema_50 = indicators.get(f'ema_{self.config.EMA_PERIODS[2]}')
+            
+            if all([is_valid_number(ema_5), is_valid_number(ema_20), is_valid_number(ema_50), is_valid_number(close)]):
+                ema5 = safe_float(ema_5, 0.0)
+                ema20 = safe_float(ema_20, 0.0)
+                ema50 = safe_float(ema_50, 0.0)
+                close_val = safe_float(close, 0.0)
+                
+                if close_val > 0:
+                    ema_spacing = abs(ema5 - ema20) / close_val
+                    
+                    if signal_type == 'BUY' and ema5 > ema20 and ema_spacing > 0.0003:
+                        reason = f"✅ Price Action Filter PASSED [Tier 3]: EMA spacing bullish ({ema_spacing:.4%})"
+                        logger.info(reason)
+                        return True, reason, 15
+                    elif signal_type == 'SELL' and ema5 < ema20 and ema_spacing > 0.0003:
+                        reason = f"✅ Price Action Filter PASSED [Tier 3]: EMA spacing bearish ({ema_spacing:.4%})"
+                        logger.info(reason)
+                        return True, reason, 15
+            
+            rsi = indicators.get('rsi')
+            rsi_prev = indicators.get('rsi_prev')
+            
+            if is_valid_number(rsi) and is_valid_number(rsi_prev):
+                rsi_val = safe_float(rsi, 50.0)
+                rsi_prev_val = safe_float(rsi_prev, 50.0)
+                rsi_momentum = rsi_val - rsi_prev_val
+                
+                if signal_type == 'BUY' and rsi_momentum > 0:
+                    reason = f"✅ Price Action Filter PASSED [Tier 4]: RSI momentum bullish (+{rsi_momentum:.1f})"
+                    logger.info(reason)
+                    return True, reason, 12
+                elif signal_type == 'SELL' and rsi_momentum < 0:
+                    reason = f"✅ Price Action Filter PASSED [Tier 4]: RSI momentum bearish ({rsi_momentum:.1f})"
+                    logger.info(reason)
+                    return True, reason, 12
+            
+            reason = "❌ Price Action Filter FAILED: No confirmation detected in any tier"
+            logger.info(reason)
+            return False, reason, 0
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_price_action_confirmation: {e}")
             return False, f"Error: {str(e)}", 0
     
+    def get_volatility_adjustment(self, indicators: Dict) -> float:
+        """Calculate dynamic threshold adjustment based on ATR/volatility
+        
+        PERBAIKAN: Dynamic thresholds berdasarkan kondisi market:
+        - High volatility (ATR > 2.0): Relax filters 20% 
+        - Normal volatility (ATR 1.0-2.0): Standard threshold
+        - Low volatility (ATR < 1.0): Keep strict
+        
+        Returns:
+            float: Adjustment multiplier (0.8 to 1.2)
+        """
+        try:
+            atr = indicators.get('atr')
+            close = indicators.get('close')
+            
+            if not is_valid_number(atr) or not is_valid_number(close):
+                return 1.0
+            
+            atr_val = safe_float(atr, 1.0)
+            close_val = safe_float(close, 1.0)
+            
+            if close_val <= 0:
+                return 1.0
+            
+            atr_percent = (atr_val / close_val) * 100
+            
+            if atr_percent > 0.05:
+                return 0.80
+            elif atr_percent > 0.03:
+                return 0.90
+            elif atr_percent < 0.02:
+                return 1.10
+            else:
+                return 1.0
+                
+        except (StrategyError, Exception) as e:
+            logger.debug(f"Error in get_volatility_adjustment: {e}")
+            return 1.0
+    
     def get_multi_confirmation_score(self, indicators: Dict, current_spread: float = 0.0) -> Dict:
-        """Get comprehensive multi-confirmation analysis
+        """Get comprehensive multi-confirmation analysis - WEIGHTED SCORING VERSION
+        
+        PERBAIKAN dengan WEIGHTED SCORING:
+        - Trend Filter: 30% weight (MUST PASS - mandatory)
+        - Momentum Filter: 20% weight
+        - Volume Filter: 15% weight
+        - Price Action: 15% weight
+        - Session Filter: 10% weight
+        - Spread Filter: 10% weight
+        
+        Threshold: 
+        - AUTO signal: ≥ 60% combined score + Trend MUST PASS
+        - MANUAL signal: ≥ 40% combined score
+        
+        Dynamic adjustment based on ATR/volatility applied.
         
         Args:
             indicators: Dictionary of calculated indicators
@@ -933,8 +1142,13 @@ class TradingStrategy:
                 'all_mandatory_passed': False,
                 'signal_type': '',
                 'total_score': 0,
+                'weighted_score': 0.0,
+                'volatility_adjustment': 1.0,
                 'confidence_reasons': []
             }
+            
+            volatility_adj = self.get_volatility_adjustment(indicators)
+            result['volatility_adjustment'] = volatility_adj
             
             trend_passed, signal_type, trend_reason = self.check_trend_filter(indicators)
             result['trend_filter'] = {'passed': trend_passed, 'signal_type': signal_type, 'reason': trend_reason}
@@ -945,7 +1159,8 @@ class TradingStrategy:
                 return result
             
             result['signal_type'] = signal_type
-            result['total_score'] += 20
+            result['total_score'] += 30
+            result['weighted_score'] += 30.0
             result['confidence_reasons'].append(trend_reason)
             
             momentum_passed, momentum_reason = self.check_momentum_filter(indicators, signal_type)
@@ -954,26 +1169,31 @@ class TradingStrategy:
             
             if momentum_passed:
                 result['total_score'] += 20
+                result['weighted_score'] += 20.0
             
             volume_passed, volume_reason = self.check_volume_vwap_filter(indicators, signal_type)
             result['volume_vwap_filter'] = {'passed': volume_passed, 'reason': volume_reason}
             result['confidence_reasons'].append(volume_reason)
             
             if volume_passed:
-                result['total_score'] += 20
+                result['total_score'] += 15
+                result['weighted_score'] += 15.0
             
             pa_passed, pa_reason, pa_points = self.check_price_action_confirmation(indicators, signal_type)
             result['price_action'] = {'passed': pa_passed, 'reason': pa_reason, 'points': pa_points}
             result['confidence_reasons'].append(pa_reason)
             if pa_passed:
-                result['total_score'] += pa_points
+                result['total_score'] += 15
+                result['weighted_score'] += 15.0
             
             session_passed = self.is_optimal_trading_session()
             if session_passed:
-                result['session_filter'] = {'passed': True, 'reason': "✅ Session Filter PASSED: London-NY overlap (07:00-16:00 UTC)"}
-                result['total_score'] += 15
+                result['session_filter'] = {'passed': True, 'reason': "✅ Session Filter PASSED: Optimal trading hours"}
+                result['total_score'] += 10
+                result['weighted_score'] += 10.0
             else:
-                result['session_filter'] = {'passed': False, 'reason': "❌ Session Filter FAILED: Outside optimal trading hours"}
+                result['session_filter'] = {'passed': False, 'reason': "⚠️ Session Filter: Outside optimal hours (non-blocking)"}
+                result['weighted_score'] += 5.0
             result['confidence_reasons'].append(result['session_filter']['reason'])
             
             max_spread_pips = safe_float(self.config.MAX_SPREAD_PIPS, 15.0)
@@ -983,22 +1203,30 @@ class TradingStrategy:
             if spread_pips <= max_spread_pips:
                 result['spread_filter'] = {'passed': True, 'reason': f"✅ Spread Filter PASSED: {spread_pips:.1f} pips <= {max_spread_pips} pips"}
                 result['total_score'] += 10
+                result['weighted_score'] += 10.0
             else:
-                result['spread_filter'] = {'passed': False, 'reason': f"❌ Spread Filter FAILED: {spread_pips:.1f} pips > {max_spread_pips} pips"}
+                spread_over = spread_pips / max_spread_pips
+                if spread_over < 1.5:
+                    result['spread_filter'] = {'passed': False, 'reason': f"⚠️ Spread slightly high: {spread_pips:.1f} pips (non-blocking)"}
+                    result['weighted_score'] += 5.0
+                else:
+                    result['spread_filter'] = {'passed': False, 'reason': f"❌ Spread Filter FAILED: {spread_pips:.1f} pips > {max_spread_pips} pips"}
             result['confidence_reasons'].append(result['spread_filter']['reason'])
             
-            mandatory_filters = [
-                trend_passed,                       # 1. Trend Filter (20 pts)
-                momentum_passed,                    # 2. Momentum Filter (20 pts)
-                volume_passed,                      # 3. Volume/VWAP Filter (20 pts)
-                pa_passed,                          # 4. Price Action Filter (15 pts) - MANDATORY
-                session_passed,                     # 5. Session Filter (15 pts)
-                result['spread_filter']['passed']   # 6. Spread Filter (10 pts)
-            ]
-            mandatory_passed = all(mandatory_filters)
-            result['all_mandatory_passed'] = mandatory_passed
+            adjusted_score = result['weighted_score'] * (2.0 - volatility_adj)
             
-            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 | All 6 Mandatory Filters: {mandatory_passed}")
+            auto_threshold = 60.0
+            
+            core_filters_passed = trend_passed and (momentum_passed or volume_passed or pa_passed)
+            score_threshold_met = adjusted_score >= auto_threshold
+            
+            result['all_mandatory_passed'] = core_filters_passed and score_threshold_met
+            
+            volatility_info = ""
+            if volatility_adj != 1.0:
+                volatility_info = f" | Volatility Adj: {volatility_adj:.2f}x"
+            
+            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 (Weighted: {adjusted_score:.0f}%){volatility_info} | Signal Ready: {result['all_mandatory_passed']}")
             
             return result
             
@@ -1009,6 +1237,7 @@ class TradingStrategy:
                 'all_mandatory_passed': False,
                 'signal_type': '',
                 'total_score': 0,
+                'weighted_score': 0.0,
                 'confidence_reasons': [f'Error: {str(e)}']
             }
     
@@ -1161,11 +1390,16 @@ class TradingStrategy:
             signal = None
             confidence_reasons = mc_result.get('confidence_reasons', [])
             
+            weighted_score = mc_result.get('weighted_score', 0.0)
+            volatility_adj = mc_result.get('volatility_adjustment', 1.0)
+            adjusted_score = weighted_score * (2.0 - volatility_adj)
+            auto_threshold = safe_float(getattr(self.config, 'SIGNAL_SCORE_THRESHOLD_AUTO', 60), 60.0)
+            
             if signal_source == 'auto':
                 if mc_result['all_mandatory_passed']:
                     signal = mc_result['signal_type']
-                    logger.info(f"✅ ALL MANDATORY FILTERS PASSED - Signal: {signal}")
-                    logger.info(f"📊 Multi-Confirmation Score: {mc_result['total_score']}/100")
+                    logger.info(f"✅ WEIGHTED SCORE PASSED - Signal: {signal}")
+                    logger.info(f"📊 Weighted Score: {adjusted_score:.0f}% (threshold: {auto_threshold}%)")
                     
                     if trf_trend is not None:
                         if signal == 'BUY' and trf_trend == 1:
@@ -1202,31 +1436,48 @@ class TradingStrategy:
                         else:
                             confidence_reasons.append("Pullback confirmed (RSI 55-60 zone)")
                     
-                    confidence_reasons.append(f"Multi-Confirmation Score: {mc_result['total_score']}/100")
+                    confidence_reasons.append(f"Weighted Score: {adjusted_score:.0f}%")
                 else:
+                    passed_filters = []
                     failed_filters = []
-                    if not mc_result['trend_filter']['passed']:
+                    
+                    if mc_result['trend_filter']['passed']:
+                        passed_filters.append("Trend")
+                    else:
                         failed_filters.append("Trend")
-                    if not mc_result['momentum_filter']['passed']:
+                    if mc_result['momentum_filter']['passed']:
+                        passed_filters.append("Momentum")
+                    else:
                         failed_filters.append("Momentum")
-                    if not mc_result['volume_vwap_filter']['passed']:
-                        failed_filters.append("Volume/VWAP")
-                    if not mc_result['price_action']['passed']:
-                        failed_filters.append("Price Action")
-                    if not mc_result['session_filter']['passed']:
+                    if mc_result['volume_vwap_filter']['passed']:
+                        passed_filters.append("Volume")
+                    else:
+                        failed_filters.append("Volume")
+                    if mc_result['price_action']['passed']:
+                        passed_filters.append("PriceAction")
+                    else:
+                        failed_filters.append("PriceAction")
+                    if mc_result['session_filter']['passed']:
+                        passed_filters.append("Session")
+                    else:
                         failed_filters.append("Session")
-                    if not mc_result['spread_filter']['passed']:
+                    if mc_result['spread_filter']['passed']:
+                        passed_filters.append("Spread")
+                    else:
                         failed_filters.append("Spread")
                     
-                    logger.info(f"❌ Signal blocked - Failed mandatory filters: {', '.join(failed_filters)}")
-                    logger.info(f"📊 Partial Score: {mc_result['total_score']}/100 (requires all 6 filters)")
+                    logger.info(f"❌ Weighted score below threshold: {adjusted_score:.0f}% < {auto_threshold}%")
+                    logger.info(f"📊 Passed: {', '.join(passed_filters) if passed_filters else 'None'} | Failed: {', '.join(failed_filters)}")
                     return None
             else:
-                if mc_result['total_score'] >= 50:
+                manual_threshold = safe_float(getattr(self.config, 'SIGNAL_SCORE_THRESHOLD_MANUAL', 40), 40.0)
+                trend_passed = mc_result['trend_filter']['passed']
+                
+                if trend_passed and adjusted_score >= manual_threshold:
                     signal = mc_result['signal_type']
-                    logger.info(f"✅ MANUAL SIGNAL APPROVED - Score: {mc_result['total_score']}/100 (threshold: 50)")
+                    logger.info(f"✅ MANUAL SIGNAL APPROVED - Weighted Score: {adjusted_score:.0f}% (threshold: {manual_threshold}%)")
                     confidence_reasons = mc_result.get('confidence_reasons', [])
-                    confidence_reasons.append(f"Manual Mode Score: {mc_result['total_score']}/100")
+                    confidence_reasons.append(f"Manual Mode Weighted Score: {adjusted_score:.0f}%")
                     
                     if trf_trend is not None:
                         if signal == 'BUY' and trf_trend == 1:
@@ -1240,18 +1491,10 @@ class TradingStrategy:
                         elif signal == 'SELL' and cerebr_bias == -1:
                             confidence_reasons.append(f"📊 Market Bias CEREBR: Bearish ({safe_float(cerebr_value, 50.0):.1f}%)")
                 else:
-                    failed_filters = []
-                    if not mc_result['trend_filter']['passed']:
-                        failed_filters.append("Trend")
-                    if not mc_result['momentum_filter']['passed']:
-                        failed_filters.append("Momentum")
-                    if not mc_result['volume_vwap_filter']['passed']:
-                        failed_filters.append("Volume/VWAP")
-                    if not mc_result['price_action']['passed']:
-                        failed_filters.append("Price Action")
-                    
-                    logger.info(f"❌ Manual signal blocked - Score: {mc_result['total_score']}/100 (requires ≥50)")
-                    logger.info(f"Failed filters: {', '.join(failed_filters) if failed_filters else 'All filters passed but score too low'}")
+                    if not trend_passed:
+                        logger.info(f"❌ Manual signal blocked - Trend filter required for MANUAL mode")
+                    else:
+                        logger.info(f"❌ Manual signal blocked - Weighted Score: {adjusted_score:.0f}% < {manual_threshold}%")
                     return None
             
             if signal:
@@ -1268,8 +1511,9 @@ class TradingStrategy:
                 
                 trend_strength = float(min(max(trend_strength, 0.0), 1.0))
                 
-                if signal_source == 'auto' and trend_strength < 0.3:
-                    logger.info(f"Auto signal rejected - trend strength too weak: {trend_strength:.2f} ({trend_desc})")
+                min_trend_strength = 0.20
+                if signal_source == 'auto' and trend_strength < min_trend_strength:
+                    logger.info(f"Auto signal rejected - trend strength too weak: {trend_strength:.2f} < {min_trend_strength} ({trend_desc})")
                     return None
                 
                 try:

@@ -3,6 +3,11 @@ import numpy as np
 from typing import Dict, Optional, Union
 from numpy.typing import NDArray
 
+
+class IndicatorError(Exception):
+    """Base exception for indicator calculation errors"""
+    pass
+
 def validate_series(series: pd.Series, min_length: int = 1, fill_value: float = 0.0) -> pd.Series:
     """
     Validate and sanitize a pandas Series before mathematical operations.

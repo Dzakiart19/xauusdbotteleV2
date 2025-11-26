@@ -63,7 +63,16 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring (optional).
 
 ## Recent Changes (26 November 2025)
-**LSP Type Safety Improvements - ZERO Errors:**
+
+**Perbaikan Exception Handlers & Type Safety - Session 2:**
+- **main.py:** Ditambahkan import `ConfigError` dari config.py (sebelumnya tidak di-import tapi digunakan)
+- **main.py:** Diperbaiki 21 malformed exception handlers dari `except (Exception,):` menjadi `except Exception:`
+- **main.py:** Diperbaiki Optional type checking issues:
+  - Line 268: Menggunakan walrus operator untuk null-safe access pada task status
+  - Lines 444-461: Ditambahkan pengecekan `if session:` sebelum menggunakan database session
+- **config.py:** Diperbaiki 2 malformed exception handlers dari `except (Exception,):` menjadi `except Exception:`
+
+**LSP Type Safety Improvements - ZERO Errors (Session 1):**
 - **bot/alert_system.py:** Fixed deque vs list type compatibility, migrated to public accessors for RateLimiter state persistence
 - **bot/analytics.py:** Fixed 37 SQLAlchemy Column type errors using cast() pattern for proper Python type conversion
 - **bot/user_manager.py:** Migrated to SQLAlchemy 2.0 Mapped annotations pattern, fixed return type safety
@@ -76,3 +85,4 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - SQLAlchemy 2.0: Migrate from `Column()` to `Mapped[type] = mapped_column()` pattern
 - Dynamic attributes: Use `setattr()` for wrapped function attribute assignment
 - Complex functions: Use `# pyright: ignore[reportGeneralTypeIssues]` for intentionally complex trading logic
+- Exception handlers: Always use `except Exception:` (not `except (Exception,):`)

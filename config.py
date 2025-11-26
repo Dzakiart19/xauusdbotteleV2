@@ -530,9 +530,10 @@ class Config:
     
     HEALTH_CHECK_PORT = _get_int_env('PORT', '8080')
     
-    TRADING_HOURS_START = _get_int_env('TRADING_HOURS_START', '7')
-    TRADING_HOURS_END = _get_int_env('TRADING_HOURS_END', '21')
-    FRIDAY_CUTOFF_HOUR = _get_int_env('FRIDAY_CUTOFF_HOUR', '20')
+    TRADING_HOURS_START = _get_int_env('TRADING_HOURS_START', '0')
+    TRADING_HOURS_END = _get_int_env('TRADING_HOURS_END', '23')
+    FRIDAY_CUTOFF_HOUR = _get_int_env('FRIDAY_CUTOFF_HOUR', '23')
+    UNLIMITED_TRADING_HOURS = os.getenv('UNLIMITED_TRADING_HOURS', 'true').lower() == 'true'
     NEWS_AVOID_MINUTES_BEFORE = _get_int_env('NEWS_AVOID_MINUTES_BEFORE', '5')
     NEWS_AVOID_MINUTES_AFTER = _get_int_env('NEWS_AVOID_MINUTES_AFTER', '10')
     

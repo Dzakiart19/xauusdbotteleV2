@@ -110,6 +110,10 @@ class RiskManager:
     
     def check_time_filter(self) -> Tuple[bool, str]:
         try:
+            if getattr(self.config, 'UNLIMITED_TRADING_HOURS', False):
+                logger.debug("UNLIMITED_TRADING_HOURS aktif - time filter dilewati")
+                return True, "Mode unlimited - trading 24/7"
+            
             utc_now = datetime.now(pytz.UTC)
             jakarta_tz = pytz.timezone('Asia/Jakarta')
             jakarta_time = utc_now.astimezone(jakarta_tz)
@@ -119,7 +123,7 @@ class RiskManager:
             
             if current_weekday == 4:
                 friday_cutoff = self.config.FRIDAY_CUTOFF_HOUR
-                if current_hour >= friday_cutoff:
+                if friday_cutoff < 24 and current_hour >= friday_cutoff:
                     reason = f"Trading dihentikan: Jumat setelah jam {friday_cutoff}:00 WIB"
                     logger.info(f"Friday cutoff: {reason}")
                     return False, reason
@@ -132,6 +136,10 @@ class RiskManager:
             
             trading_start = self.config.TRADING_HOURS_START
             trading_end = self.config.TRADING_HOURS_END
+            
+            if trading_end >= 24:
+                logger.debug(f"Trading 24 jam aktif")
+                return True, "Trading 24 jam aktif"
             
             if current_hour < trading_start:
                 reason = f"Di luar jam trading: sebelum {trading_start}:00 WIB (sekarang {current_hour}:00)"

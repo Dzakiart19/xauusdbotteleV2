@@ -1490,8 +1490,6 @@ class TradingStrategy:
                     signal = mc_result['signal_type']
                     close_price = safe_float(close, 0.0)
                     
-                    self._update_signal_tracking(candle_timestamp, signal, close_price)
-                    
                     candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
                     if candle_close_only and signal:
                         can_generate, skip_reason = self.should_generate_signal(
@@ -1500,13 +1498,12 @@ class TradingStrategy:
                         if not can_generate:
                             logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif: {skip_reason}")
                             logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
-                            logger.info(
-                                f"📝 Signal tracking diperbarui (ditolak): {signal} @ ${close_price:.2f} | "
-                                f"Alasan: {skip_reason}"
-                            )
+                            self._update_signal_tracking(candle_timestamp, signal, close_price)
                             return None
                         else:
                             logger.info(f"🕯️ Candle close check PASSED: Signal diizinkan untuk candle baru")
+                    
+                    self._update_signal_tracking(candle_timestamp, signal, close_price)
                     
                     logger.info(f"✅ WEIGHTED SCORE PASSED - Signal: {signal}")
                     logger.info(f"📊 Weighted Score: {adjusted_score:.0f}% (threshold: {auto_threshold}%)")
@@ -1587,8 +1584,6 @@ class TradingStrategy:
                     signal = mc_result['signal_type']
                     close_price = safe_float(close, 0.0)
                     
-                    self._update_signal_tracking(candle_timestamp, signal, close_price)
-                    
                     candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
                     if candle_close_only and signal:
                         can_generate, skip_reason = self.should_generate_signal(
@@ -1597,13 +1592,12 @@ class TradingStrategy:
                         if not can_generate:
                             logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif (manual): {skip_reason}")
                             logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
-                            logger.info(
-                                f"📝 Signal tracking diperbarui (ditolak): {signal} @ ${close_price:.2f} | "
-                                f"Alasan: {skip_reason}"
-                            )
+                            self._update_signal_tracking(candle_timestamp, signal, close_price)
                             return None
                         else:
                             logger.info(f"🕯️ Candle close check PASSED (manual): Signal diizinkan")
+                    
+                    self._update_signal_tracking(candle_timestamp, signal, close_price)
                     
                     logger.info(f"✅ MANUAL SIGNAL APPROVED - Weighted Score: {adjusted_score:.0f}% (threshold: {manual_threshold}%)")
                     confidence_reasons = mc_result.get('confidence_reasons', [])

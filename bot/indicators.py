@@ -466,7 +466,7 @@ class IndicatorEngine:
         try:
             rsi_tail = rsi_series.tail(20).fillna(50.0).tolist()
             indicators['rsi_history'] = [float(v) if not pd.isna(v) else 50.0 for v in rsi_tail]
-        except Exception:
+        except (IndicatorError, Exception):
             indicators['rsi_history'] = [50.0] * 20
         
         stoch_k, stoch_d = self.calculate_stochastic(
@@ -554,7 +554,7 @@ class IndicatorEngine:
                 df_time = pd.to_datetime(df['time'], errors='coerce')
                 if not df_time.isna().all():
                     has_date_index = True
-        except Exception:
+        except (IndicatorError, Exception):
             has_date_index = False
         
         if has_date_index:
@@ -579,7 +579,7 @@ class IndicatorEngine:
                 
                 vwap = vwap.fillna(typical_price)
                 return pd.Series(vwap)
-            except Exception:
+            except (IndicatorError, Exception):
                 pass
         
         rolling_period = 20
@@ -765,7 +765,7 @@ class IndicatorEngine:
                 'resistance_levels': [float(r) for r in sorted(resistance_levels)[:5]]
             }
             
-        except Exception:
+        except (IndicatorError, Exception):
             return default_result
     
     def calculate_volume_confirmation(self, df: pd.DataFrame, period: int = 10) -> Dict:
@@ -822,5 +822,5 @@ class IndicatorEngine:
                 'volume_ratio': float(volume_ratio)
             }
             
-        except Exception:
+        except (IndicatorError, Exception):
             return default_result

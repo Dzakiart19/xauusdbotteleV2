@@ -91,7 +91,7 @@ class CircuitBreaker:
             return result
         except CircuitBreakerOpenException:
             raise
-        except Exception as e:
+        except (ResilienceError, Exception) as e:
             if isinstance(e, self.expected_exception):
                 self._on_failure()
             raise
@@ -124,7 +124,7 @@ class CircuitBreaker:
             return result
         except CircuitBreakerOpenException:
             raise
-        except Exception as e:
+        except (ResilienceError, Exception) as e:
             if isinstance(e, self.expected_exception):
                 self._on_failure()
             raise

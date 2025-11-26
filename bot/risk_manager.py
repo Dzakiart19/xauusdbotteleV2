@@ -73,7 +73,7 @@ class RiskManager:
                 }
                 logger.debug(f"Cached daily P/L for user {user_id}: ${total_daily_pl:.2f}")
                 
-            except Exception as e:
+            except (RiskManagerError, Exception) as e:
                 logger.error(f"Error checking trade eligibility: {e}")
                 return False, f"Error: {str(e)}"
             finally:
@@ -100,7 +100,7 @@ class RiskManager:
                                 )
                             )
                             logger.warning(f"Risk warning sent for user {user_id}: loss {loss_percent:.2f}% approaching limit")
-                        except Exception as alert_error:
+                        except (RiskManagerError, Exception) as alert_error:
                             logger.error(f"Failed to send risk warning alert: {alert_error}")
             
             if loss_percent >= daily_loss_limit:
@@ -124,7 +124,7 @@ class RiskManager:
             logger.debug(f"Spread check passed: {spread:.1f} pips <= {max_spread:.1f} pips")
             return True, "Spread dalam batas normal"
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error in check_spread_filter: {e}")
             return True, f"Spread check error: {str(e)}"
     
@@ -166,7 +166,7 @@ class RiskManager:
             logger.debug(f"Time check passed: {current_hour}:00 WIB (trading hours: {trading_start}:00-{trading_end}:00)")
             return True, f"Dalam jam trading ({trading_start}:00-{trading_end}:00 WIB)"
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error in check_time_filter: {e}")
             return True, f"Time check error: {str(e)}"
     
@@ -191,7 +191,7 @@ class RiskManager:
             
             return lot_size
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error calculating position size: {e}")
             return self.config.LOT_SIZE
     
@@ -222,7 +222,7 @@ class RiskManager:
             
             return lot_size
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error in calculate_lot_from_risk: {e}")
             return self.config.LOT_SIZE
     
@@ -257,7 +257,7 @@ class RiskManager:
             
             return sl_price, tp_price
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error calculating dynamic SL/TP: {e}")
             default_sl_distance = self.config.DEFAULT_SL_PIPS / self.config.XAUUSD_PIP_VALUE
             default_tp_distance = self.config.DEFAULT_TP_PIPS / self.config.XAUUSD_PIP_VALUE
@@ -328,7 +328,7 @@ class RiskManager:
                 logger.debug(f"Daily stats for user {user_id}: {stats}")
                 return stats
                 
-            except Exception as e:
+            except (RiskManagerError, Exception) as e:
                 logger.error(f"Error getting daily stats: {e}")
                 return {
                     'date': jakarta_time.strftime('%Y-%m-%d'),
@@ -342,7 +342,7 @@ class RiskManager:
             finally:
                 session.close()
                 
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error in get_daily_stats: {e}")
             return {
                 'error': str(e),
@@ -375,6 +375,6 @@ class RiskManager:
             
             return round(pl, 2)
             
-        except Exception as e:
+        except (RiskManagerError, Exception) as e:
             logger.error(f"Error calculating P/L: {e}")
             return 0.0

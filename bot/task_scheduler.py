@@ -281,7 +281,7 @@ class ScheduledTask:
                     def _done_callback(t: asyncio.Task):
                         try:
                             on_complete(t, self.name)
-                        except Exception as cb_err:
+                        except (TaskSchedulerError, Exception) as cb_err:
                             logger.error(f"Completion callback error for {self.name}: {cb_err}")
                     self.current_execution_task.add_done_callback(_done_callback)
                 
@@ -332,7 +332,7 @@ class ScheduledTask:
             
             self._check_auto_disable(alert_system)
             
-        except Exception as e:
+        except (TaskSchedulerError, Exception) as e:
             self.error_count += 1
             self.consecutive_failures += 1
             self._last_exception = e
@@ -357,7 +357,7 @@ class ScheduledTask:
                     except asyncio.TimeoutError:
                         logger.warning(f"Alert task for {self.name} timed out")
                     logger.warning(f"Alert sent: Task {self.name} has {self.consecutive_failures} consecutive failures")
-                except Exception as alert_error:
+                except (TaskSchedulerError, Exception) as alert_error:
                     logger.error(f"Failed to send task failure alert: {alert_error}")
             
             self._check_auto_disable(alert_system)
@@ -386,7 +386,7 @@ class ScheduledTask:
                             f"Last error: {self._last_exception}"
                         )
                     )
-                except Exception as e:
+                except (TaskSchedulerError, Exception) as e:
                     logger.error(f"Failed to send auto-disable alert: {e}")
     
     def get_last_exception(self) -> Optional[Exception]:
@@ -505,7 +505,7 @@ class TaskScheduler:
             except asyncio.CancelledError:
                 pass
                 
-        except Exception as e:
+        except (TaskSchedulerError, Exception) as e:
             logger.error(f"Error in task done callback for {task_name}: {e}")
     
     def add_task(self, name: str, func: Callable, interval: Optional[int] = None,
@@ -803,7 +803,7 @@ class TaskScheduler:
                     if not self._shutdown_flag.is_set():
                         try:
                             await self.run_aggressive_cleanup()
-                        except Exception as e:
+                        except (TaskSchedulerError, Exception) as e:
                             logger.error(f"Error during cleanup: {e}")
         except asyncio.CancelledError:
             logger.info("Cleanup loop cancelled")
@@ -835,7 +835,7 @@ class TaskScheduler:
             await task
         except asyncio.CancelledError:
             logger.debug(f"Tracked task {task_name} was cancelled")
-        except Exception as e:
+        except (TaskSchedulerError, Exception) as e:
             self._task_exceptions[task_name] = e
             logger.error(f"Tracked task {task_name} failed: {e}")
         finally:
@@ -921,7 +921,7 @@ class TaskScheduler:
                 except asyncio.CancelledError:
                     logger.info("Scheduler loop cancelled")
                     break
-                except Exception as e:
+                except (TaskSchedulerError, Exception) as e:
                     logger.error(f"Error in scheduler loop: {e}")
                     if not self._shutdown_flag.is_set():
                         await asyncio.sleep(5)
@@ -977,7 +977,7 @@ class TaskScheduler:
                 logger.warning(f"Cleanup loop cancellation timed out after {TASK_CANCEL_TIMEOUT}s")
             except asyncio.CancelledError:
                 logger.info("✅ Cleanup loop cancelled")
-            except Exception as e:
+            except (TaskSchedulerError, Exception) as e:
                 logger.error(f"Error stopping cleanup loop: {e}")
         
         if self.scheduler_task and not self.scheduler_task.done():
@@ -990,7 +990,7 @@ class TaskScheduler:
                 logger.warning(f"Scheduler loop cancellation timed out after {TASK_CANCEL_TIMEOUT}s")
             except asyncio.CancelledError:
                 logger.info("✅ Scheduler loop cancelled")
-            except Exception as e:
+            except (TaskSchedulerError, Exception) as e:
                 logger.error(f"Error stopping scheduler loop: {e}")
         
         logger.info("Cancelling individual task executions...")
@@ -1033,7 +1033,7 @@ class TaskScheduler:
                             p.cancel()
                     else:
                         logger.info(f"✅ All {completed} task executions completed")
-                except Exception as e:
+                except (TaskSchedulerError, Exception) as e:
                     logger.error(f"Error waiting for task executions: {e}")
         else:
             logger.info("No active task executions to cancel")
@@ -1158,16 +1158,16 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
                 
                 session.commit()
                 logger.info(f"Deleted {old_trades} old trade records")
-            except Exception as e:
+            except (TaskSchedulerError, Exception) as e:
                 logger.error(f"Error cleaning database: {e}")
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (TaskSchedulerError, Exception) as rollback_error:
                     logger.error(f"Error during rollback: {rollback_error}")
             finally:
                 try:
                     session.close()
-                except Exception as close_error:
+                except (TaskSchedulerError, Exception) as close_error:
                     logger.error(f"Error closing session: {close_error}")
     
     async def health_check():
@@ -1205,7 +1205,7 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
             try:
                 await market_data.save_candles_to_db(db_manager)
                 market_data._prune_old_candles(db_manager, keep_count=150)
-            except Exception as e:
+            except (TaskSchedulerError, Exception) as e:
                 logger.error(f"Error in periodic candle save: {e}")
     
     scheduler.add_interval_task(
@@ -1243,12 +1243,12 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
                                 os.remove(file_path)
                                 deleted_count += 1
                                 logger.debug(f"Deleted chart: {f} (age: {age:.1f}min)")
-                            except Exception as e:
+                            except (TaskSchedulerError, Exception) as e:
                                 logger.warning(f"Failed to delete chart {f}: {e}")
                     
                     if deleted_count > 0:
                         logger.info(f"Aggressive cleanup: removed {deleted_count} old charts")
-            except Exception as e:
+            except (TaskSchedulerError, Exception) as e:
                 logger.error(f"Error in aggressive chart cleanup: {e}")
     
     scheduler.add_interval_task(

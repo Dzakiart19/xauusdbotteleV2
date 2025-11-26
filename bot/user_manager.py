@@ -132,20 +132,20 @@ class UserManager:
         try:
             yield session
             session.commit()
-        except Exception as e:
+        except (UserManagerError, Exception) as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (UserManagerError, Exception) as rollback_error:
                 logger.error(f"Error during session rollback: {rollback_error}")
             raise
         finally:
             try:
                 session.close()
-            except Exception as close_error:
+            except (UserManagerError, Exception) as close_error:
                 logger.error(f"Error closing session: {close_error}")
             try:
                 self.Session.remove()
-            except Exception as remove_error:
+            except (UserManagerError, Exception) as remove_error:
                 logger.error(f"Error removing scoped session: {remove_error}")
     
     def create_user(self, telegram_id: int, username: Optional[str] = None,
@@ -185,7 +185,7 @@ class UserManager:
                     session.expunge(user)
                     return user
                     
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error creating user: {e}")
                     return None
     
@@ -203,7 +203,7 @@ class UserManager:
                     session.expunge(user)
                 
                 return user
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting user: {e}")
                 return None
     
@@ -216,7 +216,7 @@ class UserManager:
             try:
                 user = session.query(User).filter(User.username == username).first()
                 return int(user.telegram_id) if user else None
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting user by username: {e}")
                 return None
     
@@ -233,7 +233,7 @@ class UserManager:
                     if user:
                         user.last_active = datetime.utcnow()
                         logger.debug(f"Updated activity for user {telegram_id}")
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error updating user activity: {e}")
     
     def is_authorized(self, telegram_id: int) -> bool:
@@ -263,7 +263,7 @@ class UserManager:
                 for user in users:
                     session.expunge(user)
                 return users
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting all users: {e}")
                 return []
     
@@ -275,7 +275,7 @@ class UserManager:
                 for user in users:
                     session.expunge(user)
                 return users
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting active users: {e}")
                 return []
     
@@ -300,7 +300,7 @@ class UserManager:
                         return True
                     
                     return False
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error deactivating user: {e}")
                     return False
     
@@ -320,7 +320,7 @@ class UserManager:
                         return True
                     
                     return False
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error activating user: {e}")
                     return False
     
@@ -339,7 +339,7 @@ class UserManager:
                         user.total_trades += 1
                         user.total_profit += profit
                         logger.debug(f"Updated stats for user {telegram_id}: profit={profit}")
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error updating user stats: {e}")
     
     def get_user_preferences(self, telegram_id: int) -> Optional[UserPreferences]:
@@ -352,7 +352,7 @@ class UserManager:
                 if prefs:
                     session.expunge(prefs)
                 return prefs
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting user preferences: {e}")
                 return None
     
@@ -379,7 +379,7 @@ class UserManager:
                     logger.info(f"Updated preferences for user {telegram_id}")
                     return True
                     
-                except Exception as e:
+                except (UserManagerError, Exception) as e:
                     logger.error(f"Error updating preferences: {e}")
                     return False
     
@@ -453,7 +453,7 @@ class UserManager:
                     'inactive': total - active,
                     'admins': admins
                 }
-            except Exception as e:
+            except (UserManagerError, Exception) as e:
                 logger.error(f"Error getting user count: {e}")
                 return {
                     'total': 0,

@@ -69,7 +69,7 @@ class SignalSessionManager:
                     await handler(session)
                 else:
                     handler(session)
-            except Exception as e:
+            except (SessionError, Exception) as e:
                 logger.error(f"Error in event handler for {event}: {e}")
     
     async def can_create_signal(self, user_id: int, signal_source: str) -> tuple[bool, Optional[str]]:
@@ -186,7 +186,7 @@ class SignalSessionManager:
                     logger.warning(f"Chart file still exists after deletion: {chart_path}")
         except FileNotFoundError:
             logger.debug(f"Chart file already deleted: {chart_path}")
-        except Exception as e:
+        except (SessionError, Exception) as e:
             logger.warning(f"Failed to cleanup chart {chart_path}: {e}")
     
     async def clear_all_sessions(self, reason: str = "system_reset") -> int:
@@ -228,7 +228,7 @@ class SignalSessionManager:
         for session in sessions_to_end:
             try:
                 await self._emit_event_outside_lock('on_session_end', session)
-            except Exception as e:
+            except (SessionError, Exception) as e:
                 logger.error(f"Error emitting end event for session {session.signal_id}: {e}")
         
         logger.info(f"✅ All {session_count} signal sessions cleared successfully")

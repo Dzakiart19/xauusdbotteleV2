@@ -333,7 +333,7 @@ def validate_indicator_value(name: str, value: Any, min_val: Optional[float] = N
         
         return True, None
         
-    except Exception as e:
+    except (StrategyError, Exception) as e:
         return False, f"{name} validation error: {str(e)}"
 
 def validate_indicators(indicators: Dict) -> Tuple[bool, Optional[str]]:
@@ -391,7 +391,7 @@ def validate_indicators(indicators: Dict) -> Tuple[bool, Optional[str]]:
         
         return True, None
         
-    except Exception as e:
+    except (StrategyError, Exception) as e:
         return False, f"Indicator validation error: {str(e)}"
 
 class TradingStrategy:
@@ -501,7 +501,7 @@ class TradingStrategy:
             
             return score, description
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error calculating trend strength: {e}")
             logger.warning(f"Trend strength calculation fallback triggered: Using default MEDIUM score due to error: {str(e)}")
             return default_score, default_desc
@@ -551,10 +551,10 @@ class TradingStrategy:
                                 )
                             )
                             logger.warning(f"High volatility detected: {volatility_percent:.2f}% (ATR: ${atr:.2f}, Price: ${close:.2f})")
-                        except Exception as alert_error:
+                        except (StrategyError, Exception) as alert_error:
                             logger.error(f"Failed to send high volatility alert: {alert_error}")
                             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error checking high volatility: {e}")
     
     def check_pullback_confirmation(self, rsi_history: list, signal_type: str) -> bool:
@@ -597,7 +597,7 @@ class TradingStrategy:
                     return True
             
             return False
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error checking pullback confirmation: {e}")
             return False
     
@@ -617,7 +617,7 @@ class TradingStrategy:
             if 7 <= current_hour < 16:
                 return True
             return False
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error checking trading session: {e}")
             return False
     
@@ -677,7 +677,7 @@ class TradingStrategy:
                 logger.debug(reason)
                 return False, '', reason
                 
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in check_trend_filter: {e}")
             return False, '', f"Error: {str(e)}"
     
@@ -766,7 +766,7 @@ class TradingStrategy:
             logger.info(reason)
             return True, reason
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in check_momentum_filter: {e}")
             return False, f"Error: {str(e)}"
     
@@ -832,7 +832,7 @@ class TradingStrategy:
             logger.info(reason)
             return True, reason
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in check_volume_vwap_filter: {e}")
             return False, f"Error: {str(e)}"
     
@@ -908,7 +908,7 @@ class TradingStrategy:
                 logger.info(reason)
                 return False, reason, 0
                 
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in check_price_action_confirmation: {e}")
             return False, f"Error: {str(e)}", 0
     
@@ -1002,7 +1002,7 @@ class TradingStrategy:
             
             return result
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in get_multi_confirmation_score: {e}")
             return {
                 'trend_filter': {'passed': False, 'signal_type': '', 'reason': f'Error: {str(e)}'},
@@ -1088,7 +1088,7 @@ class TradingStrategy:
             
             return sl_price, tp_price, sl_pips, tp_pips
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error in calculate_sl_tp: {e}")
             return None, None, None, None
         
@@ -1242,7 +1242,7 @@ class TradingStrategy:
             if signal:
                 try:
                     trend_strength, trend_desc = self.calculate_trend_strength(indicators)
-                except Exception as e:
+                except (StrategyError, Exception) as e:
                     logger.error(f"Error calculating trend strength: {e}")
                     trend_strength, trend_desc = 0.3, "MEDIUM ⚡"
                 
@@ -1413,7 +1413,7 @@ class TradingStrategy:
             
             return None
             
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Error detecting signal: {e}")
             return None
     
@@ -1473,7 +1473,7 @@ class TradingStrategy:
                 max_spread = safe_float(self.config.MAX_SPREAD_PIPS, 50.0, "MAX_SPREAD_PIPS")
                 if spread_pips > max_spread:
                     return False, f"Spread too high: {spread_pips:.2f} pips (max: {max_spread})"
-            except Exception as e:
+            except (StrategyError, Exception) as e:
                 logger.warning(f"Error calculating spread pips: {e}")
             
             pip_value = safe_float(self.config.XAUUSD_PIP_VALUE, 10.0, "XAUUSD_PIP_VALUE_validate")
@@ -1512,6 +1512,6 @@ class TradingStrategy:
             
         except KeyError as e:
             return False, f"Missing key in signal: {e}"
-        except Exception as e:
+        except (StrategyError, Exception) as e:
             logger.error(f"Signal validation error: {type(e).__name__}: {e}")
             return False, f"Validation error: {str(e)}"

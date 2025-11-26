@@ -108,7 +108,7 @@ class ErrorContext:
                         if not key.startswith('_'):
                             try:
                                 frame_locals[key] = repr(value)[:200]
-                            except Exception:
+                            except (ErrorHandlingError, Exception):
                                 frame_locals[key] = "<unrepresentable>"
                     frame_info['locals'] = frame_locals
                     
@@ -458,7 +458,7 @@ def handle_exceptions(context: str = "", reraise: bool = False,
                 raise
             except propagate_types:
                 raise
-            except Exception as e:
+            except (ErrorHandlingError, Exception) as e:
                 category = categorize_exception(e)
                 
                 error_handler = None
@@ -494,7 +494,7 @@ def handle_async_exceptions(context: str = "", reraise: bool = False,
                 raise
             except propagate_types:
                 raise
-            except Exception as e:
+            except (ErrorHandlingError, Exception) as e:
                 category = categorize_exception(e)
                 
                 error_handler = None
@@ -650,7 +650,7 @@ class CircuitBreaker:
             return result
         except CRITICAL_EXCEPTIONS:
             raise
-        except Exception as e:
+        except (ErrorHandlingError, Exception) as e:
             self._handle_failure(e)
             raise
     
@@ -663,7 +663,7 @@ class CircuitBreaker:
             return result
         except ASYNC_CRITICAL_EXCEPTIONS:
             raise
-        except Exception as e:
+        except (ErrorHandlingError, Exception) as e:
             self._handle_failure(e)
             raise
     

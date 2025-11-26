@@ -25,7 +25,7 @@ class SystemMonitor:
         """Get current CPU usage percentage"""
         try:
             return self.process.cpu_percent(interval=0.1)
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting CPU usage: {e}")
             return 0.0
     
@@ -40,7 +40,7 @@ class SystemMonitor:
                 'vms_mb': round(mem_info.vms / (1024 * 1024), 2),
                 'percent': round(mem_percent, 2)
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting memory usage: {e}")
             return {'rss_mb': 0.0, 'vms_mb': 0.0, 'percent': 0.0}
     
@@ -58,7 +58,7 @@ class SystemMonitor:
                 'disk_usage_percent': round(disk.percent, 2),
                 'disk_free_gb': round(disk.free / (1024 * 1024 * 1024), 2)
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting system stats: {e}")
             return {}
     
@@ -79,7 +79,7 @@ class SystemMonitor:
                 self.ws_reconnection_count += 1
             
             logger.debug(f"WebSocket status updated: {status}")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error updating WS status: {e}")
     
     def get_ws_health(self) -> Dict[str, Any]:
@@ -106,7 +106,7 @@ class SystemMonitor:
                     health['health_status'] = 'critical'
             
             return health
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting WS health: {e}")
             return {'status': 'error', 'health_status': 'unknown'}
     
@@ -121,7 +121,7 @@ class SystemMonitor:
                 'create_time': datetime.fromtimestamp(self.process.create_time(), tz=pytz.UTC).isoformat(),
                 'uptime_seconds': round(time.time() - self.process.create_time(), 2)
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting process info: {e}")
             return {}
     
@@ -134,7 +134,7 @@ class SystemMonitor:
                 'system': self.get_system_stats(),
                 'websocket': self.get_ws_health()
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting comprehensive health: {e}")
             return {'error': str(e)}
 
@@ -178,7 +178,7 @@ class TrackingMetrics:
                 self.signal_rejected_count += 1
             
             logger.debug(f"Signal recorded: accepted={accepted}, total={self.signal_count}")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error recording signal: {e}")
     
     def record_execution_time(self, operation: str, execution_time: float):
@@ -204,7 +204,7 @@ class TrackingMetrics:
             self.operation_times[operation].append(execution_time)
             
             logger.debug(f"Execution time recorded: {operation} = {execution_time:.3f}s")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error recording execution time: {e}")
     
     def _maybe_cleanup(self):
@@ -214,7 +214,7 @@ class TrackingMetrics:
             if (now - self._last_cleanup).total_seconds() >= self.CLEANUP_INTERVAL_SECONDS:
                 self._cleanup_old_data()
                 self._last_cleanup = now
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error in cleanup check: {e}")
     
     def _cleanup_old_data(self):
@@ -232,7 +232,7 @@ class TrackingMetrics:
             
             if op_count_cleaned > 0 or times_cleaned > 0:
                 logger.info(f"TrackingMetrics cleanup: removed {op_count_cleaned} op_counts, {times_cleaned} op_times entries")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error cleaning up old data: {e}")
     
     def reset_counters(self):
@@ -244,7 +244,7 @@ class TrackingMetrics:
             self.operation_counts.clear()
             self.operation_times.clear()
             logger.info("TrackingMetrics counters reset")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error resetting counters: {e}")
     
     def get_signal_rate(self, minutes: int = 60) -> Dict[str, Any]:
@@ -284,7 +284,7 @@ class TrackingMetrics:
                 'rejection_rate': round(rejection_rate, 2),
                 'window_minutes': minutes
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting signal rate: {e}")
             return {'error': str(e)}
     
@@ -338,7 +338,7 @@ class TrackingMetrics:
                                 'max_time': round(max(times), 3)
                             }
                 return stats
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting execution stats: {e}")
             return {'error': str(e)}
     
@@ -352,7 +352,7 @@ class TrackingMetrics:
                 'operation_times_size': len(self.operation_times),
                 'total_operations': sum(self.operation_counts.values())
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting memory stats: {e}")
             return {'error': str(e)}
     
@@ -365,7 +365,7 @@ class TrackingMetrics:
                 'execution_stats': self.get_execution_stats(),
                 'total_operations': sum(self.operation_counts.values())
             }
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error getting performance summary: {e}")
             return {'error': str(e)}
 
@@ -421,7 +421,7 @@ class PerformanceLogger:
                 
         except asyncio.CancelledError:
             logger.info("Performance logging loop cancelled")
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error in performance logging loop: {e}", exc_info=True)
     
     async def _log_performance(self):
@@ -438,7 +438,7 @@ class PerformanceLogger:
             try:
                 with open(self.log_file, 'a') as f:
                     f.write(log_line + '\n')
-            except Exception as e:
+            except (PerformanceMonitorError, Exception) as e:
                 logger.error(f"Error writing to performance log file: {e}")
             
             cpu = metrics['system_health'].get('process', {}).get('cpu_percent', 0)
@@ -451,7 +451,7 @@ class PerformanceLogger:
                 f"WS={ws_status} | Signals/hr={signal_rate:.1f}"
             )
             
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error logging performance: {e}", exc_info=True)
     
     def log_now(self):
@@ -469,10 +469,10 @@ class PerformanceLogger:
                 with open(self.log_file, 'a') as f:
                     f.write(log_line + '\n')
                 logger.info(f"Performance metrics logged to {self.log_file}")
-            except Exception as e:
+            except (PerformanceMonitorError, Exception) as e:
                 logger.error(f"Error writing to performance log file: {e}")
                 
-        except Exception as e:
+        except (PerformanceMonitorError, Exception) as e:
             logger.error(f"Error logging performance immediately: {e}")
 
 

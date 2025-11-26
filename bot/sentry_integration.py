@@ -54,7 +54,7 @@ class SentryIntegrationManager:
             
         except ImportError:
             logger.warning("sentry-sdk not installed - install with: pip install sentry-sdk")
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.error(f"Failed to initialize Sentry: {e}")
     
     def capture_exception(self, exception: Exception, context: Optional[Dict[str, Any]] = None, level: str = 'error') -> str:
@@ -88,7 +88,7 @@ class SentryIntegrationManager:
                 if context:
                     logger.debug(f"Context: {context}")
                     
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.error(f"Failed to capture exception to Sentry: {e}")
         
         return str(event_id)
@@ -122,7 +122,7 @@ class SentryIntegrationManager:
             else:
                 logger.info(f"Message (no Sentry, level: {level}): {message}")
                 
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.error(f"Failed to capture message to Sentry: {e}")
         
         return str(event_id)
@@ -145,7 +145,7 @@ class SentryIntegrationManager:
                     'email': email
                 })
                 logger.debug(f"Sentry user context set for user {user_id}")
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.debug(f"Failed to set Sentry user context: {e}")
     
     def clear_user_context(self):
@@ -155,7 +155,7 @@ class SentryIntegrationManager:
                 import sentry_sdk
                 sentry_sdk.set_user(None)
                 logger.debug("Sentry user context cleared")
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.debug(f"Failed to clear Sentry user context: {e}")
     
     def set_tag(self, key: str, value: str):
@@ -169,7 +169,7 @@ class SentryIntegrationManager:
             if self.sentry_enabled:
                 import sentry_sdk
                 sentry_sdk.set_tag(key, value)
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.debug(f"Failed to set Sentry tag: {e}")
     
     def close(self):
@@ -179,7 +179,7 @@ class SentryIntegrationManager:
                 import sentry_sdk
                 sentry_sdk.flush(timeout=2)
                 logger.info("Sentry connection closed")
-        except Exception as e:
+        except (SentryError, Exception) as e:
             logger.debug(f"Error closing Sentry: {e}")
 
 

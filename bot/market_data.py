@@ -171,7 +171,7 @@ class OHLCBuilder:
             
             return True, None
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             return False, f"Validation error: {str(e)}"
         
     def add_tick(self, bid: float, ask: float, timestamp: datetime):
@@ -222,7 +222,7 @@ class OHLCBuilder:
             self.tick_count += 1
             self.current_candle['volume'] = self.tick_count
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error adding tick to M{self.timeframe_minutes} builder: {e}")
             logger.debug(f"Tick data: bid={bid}, ask={ask}, timestamp={timestamp}")
         
@@ -272,7 +272,7 @@ class OHLCBuilder:
             
             return df
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error creating DataFrame for M{self.timeframe_minutes}: {e}")
             return None
     
@@ -559,7 +559,7 @@ class MarketDataClient:
                             queue.get_nowait()
                         except asyncio.QueueEmpty:
                             break
-                except Exception as e:
+                except (MarketDataError, Exception) as e:
                     logger.debug(f"Error draining queue for '{name}': {e}")
                 
                 del self.subscribers[name]
@@ -666,7 +666,7 @@ class MarketDataClient:
                                 break
                         if drained > 0:
                             logger.debug(f"Drained {drained} pending messages from '{name}' queue")
-                except Exception as e:
+                except (MarketDataError, Exception) as e:
                     logger.debug(f"Error draining stale queue '{name}': {e}")
                 
                 if name in self.subscribers:
@@ -746,7 +746,7 @@ class MarketDataClient:
                                 queue.get_nowait()
                             except asyncio.QueueEmpty:
                                 break
-                except Exception as e:
+                except (MarketDataError, Exception) as e:
                     logger.debug(f"Error draining queue '{name}' during shutdown: {e}")
             
             self.subscribers.clear()
@@ -790,7 +790,7 @@ class MarketDataClient:
                         else:
                             logger.debug(f"Queue full for subscriber '{name}' after {max_retries} retries, message dropped")
                             
-                    except Exception as e:
+                    except (MarketDataError, Exception) as e:
                         logger.error(f"Error broadcasting tick to '{name}': {e}")
                         break
                 
@@ -916,7 +916,7 @@ class MarketDataClient:
         except asyncio.CancelledError:
             logger.info("Historical candle fetch cancelled")
             raise
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error fetching historical candles for M{timeframe_minutes}: {e}", exc_info=True)
             return False
     
@@ -986,7 +986,7 @@ class MarketDataClient:
                                 
                                 if not m1_success and not m5_success:
                                     logger.warning("Failed to fetch any historical data, but continuing with live feed")
-                            except Exception as e:
+                            except (MarketDataError, Exception) as e:
                                 logger.error(f"Error fetching historical data: {e}. Continuing with live feed")
                         
                         logger.info(f"Final candle counts after init: M1={len(self.m1_builder.candles)}, M5={len(self.m5_builder.candles)}")
@@ -1044,7 +1044,7 @@ class MarketDataClient:
                 self.connection_metrics.record_disconnection()
                 await self._handle_reconnect()
                 
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Unexpected WebSocket error: {type(e).__name__}: {e}", exc_info=True)
                 self.connected = False
                 self.connection_metrics.record_disconnection()
@@ -1075,12 +1075,12 @@ class MarketDataClient:
                                 f"warning={health_report['warning']}, "
                                 f"critical={health_report['critical']}"
                             )
-                except Exception as cleanup_err:
+                except (MarketDataError, Exception) as cleanup_err:
                     logger.error(f"Error during cleanup cycle {cleanup_count}: {cleanup_err}")
                     
         except asyncio.CancelledError:
             logger.debug(f"Periodic cleanup task cancelled after {cleanup_count} cycles")
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Fatal error in periodic stale cleanup: {e}", exc_info=True)
     
     async def _send_heartbeat(self):
@@ -1092,7 +1092,7 @@ class MarketDataClient:
                     await self.ws.send(json.dumps(ping_msg))
                     self.last_ping = current_time
                 await asyncio.sleep(1)
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.debug(f"Heartbeat error: {e}")
                 break
     
@@ -1111,7 +1111,7 @@ class MarketDataClient:
                         if self.ws:
                             try:
                                 await self.ws.close()
-                            except Exception as close_error:
+                            except (MarketDataError, Exception) as close_error:
                                 logger.debug(f"Error closing stale WebSocket: {close_error}")
                         break
                     
@@ -1121,7 +1121,7 @@ class MarketDataClient:
                         
         except asyncio.CancelledError:
             pass
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error in data staleness monitor: {e}")
     
     async def _handle_reconnect(self):
@@ -1143,14 +1143,14 @@ class MarketDataClient:
                 try:
                     self._seed_initial_tick()
                     await self._run_simulator()
-                except Exception as sim_error:
+                except (MarketDataError, Exception) as sim_error:
                     logger.error(f"Failed to start simulator: {sim_error}", exc_info=True)
                 return
         
         try:
             await self.circuit_breaker.call_async(self._attempt_reconnect)
             self.connection_metrics.record_reconnect_attempt(success=True)
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Reconnection failed: {e}")
             self.connection_metrics.record_reconnect_attempt(success=False)
             
@@ -1165,7 +1165,7 @@ class MarketDataClient:
                 try:
                     self._seed_initial_tick()
                     await self._run_simulator()
-                except Exception as sim_error:
+                except (MarketDataError, Exception) as sim_error:
                     logger.error(f"Failed to start simulator: {sim_error}", exc_info=True)
     
     async def _attempt_reconnect(self):
@@ -1194,7 +1194,7 @@ class MarketDataClient:
             try:
                 self._seed_initial_tick()
                 await self._run_simulator()
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Failed to start simulator: {e}", exc_info=True)
     
     def _seed_initial_tick(self):
@@ -1376,7 +1376,7 @@ class MarketDataClient:
                 
                 await asyncio.sleep(0.5)
                 
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Simulator error: {e}")
                 await asyncio.sleep(5)
         
@@ -1458,7 +1458,7 @@ class MarketDataClient:
                     }
                     await self._broadcast_tick(tick_data)
                     
-                except Exception as e:
+                except (MarketDataError, Exception) as e:
                     logger.error(f"Error processing tick data: {e}")
                     logger.debug(f"Tick content: {tick}")
                 
@@ -1477,7 +1477,7 @@ class MarketDataClient:
                 if msg_type not in ["tick", "ping", "pong"]:
                     logger.debug(f"Received message type: {msg_type}")
                         
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Unexpected error processing message: {type(e).__name__}: {e}", exc_info=True)
             if message:
                 logger.debug(f"Raw message (truncated): {message[:500]}")
@@ -1496,7 +1496,7 @@ class MarketDataClient:
             logger.debug("No valid current price available")
             return None
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error calculating current price: {e}")
             return None
     
@@ -1511,7 +1511,7 @@ class MarketDataClient:
             
             return None
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error getting bid/ask: {e}")
             return None
     
@@ -1527,7 +1527,7 @@ class MarketDataClient:
             
             return None
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error calculating spread: {e}")
             return None
     
@@ -1560,7 +1560,7 @@ class MarketDataClient:
             
             return None
                         
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error fetching historical data for {timeframe}: {e}", exc_info=True)
             return None
     
@@ -1590,7 +1590,7 @@ class MarketDataClient:
                         snapshots[timeframe + '_current'] = None
                 
                 logger.debug("Created thread-safe snapshots of candle data (including current_candle) for DB save")
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Error creating candle snapshots: {e}")
                 return False
         
@@ -1655,7 +1655,7 @@ class MarketDataClient:
                 logger.info(f"✅ Saved candles to database: M1={saved_m1}, M5={saved_m5}")
                 return True
                 
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Error saving candles to database: {e}", exc_info=True)
                 if session is not None:
                     try:
@@ -1771,7 +1771,7 @@ class MarketDataClient:
                     logger.debug("Set _loading_from_db=False - WebSocket tick processing enabled")
                     return False
                     
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.error(f"Error loading candles from database: {e}", exc_info=True)
                 logger.warning("Falling back to fetching candles from Deriv API")
                 if session is not None:
@@ -1851,7 +1851,7 @@ class MarketDataClient:
             
             return pruned_total
             
-        except Exception as e:
+        except (MarketDataError, Exception) as e:
             logger.error(f"Error pruning old candles: {e}", exc_info=True)
             if session is not None:
                 try:
@@ -1876,7 +1876,7 @@ class MarketDataClient:
             try:
                 await self.ws.close()
                 logger.debug("WebSocket closed during shutdown")
-            except Exception as e:
+            except (MarketDataError, Exception) as e:
                 logger.debug(f"Error closing WebSocket during shutdown: {e}")
         
         await self._set_connection_state(ConnectionState.DISCONNECTED)

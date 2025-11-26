@@ -61,7 +61,7 @@ def validate_chart_data(df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
         
         return True, None
         
-    except Exception as e:
+    except (ChartGeneratorError, Exception) as e:
         return False, f"Validation error: {str(e)}"
 
 class ChartGenerator:
@@ -109,7 +109,7 @@ class ChartGenerator:
                     try:
                         df_copy['timestamp'] = pd.to_datetime(df_copy['timestamp'])
                         df_copy.set_index('timestamp', inplace=True)
-                    except Exception as e:
+                    except (ChartGeneratorError, Exception) as e:
                         logger.error(f"Error converting timestamp to DatetimeIndex: {e}")
                         return None
                 else:
@@ -259,7 +259,7 @@ class ChartGenerator:
                 chart_path = filepath
                 logger.info(f"✅ Chart generated successfully: {filepath} ({len(df_copy)} candles)")
                 
-            except Exception as plot_error:
+            except (ChartGeneratorError, Exception) as plot_error:
                 logger.error(f"Plotting error: {type(plot_error).__name__}: {plot_error}")
                 return None
             finally:
@@ -267,7 +267,7 @@ class ChartGenerator:
                     import matplotlib.pyplot as plt
                     plt.close('all')
                     gc.collect()
-                except Exception as cleanup_error:
+                except (ChartGeneratorError, Exception) as cleanup_error:
                     logger.warning(f"Error during matplotlib cleanup: {cleanup_error}")
             
             return chart_path
@@ -276,10 +276,10 @@ class ChartGenerator:
             logger.error("Memory error generating chart - insufficient memory")
             try:
                 gc.collect()
-            except Exception:
+            except (ChartGeneratorError, Exception):
                 pass
             return None
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Unexpected error generating chart: {type(e).__name__}: {e}", exc_info=True)
             return None
     
@@ -346,12 +346,12 @@ class ChartGenerator:
                     if hasattr(future, 'cancel'):
                         future.cancel()
                         logger.debug(f"Cancelled timed out executor future {future_id}")
-                except Exception as cancel_err:
+                except (ChartGeneratorError, Exception) as cancel_err:
                     logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
                 
                 try:
                     gc.collect()
-                except Exception:
+                except (ChartGeneratorError, Exception):
                     pass
             
             return None
@@ -361,7 +361,7 @@ class ChartGenerator:
                 try:
                     if hasattr(future, 'cancel'):
                         future.cancel()
-                except Exception:
+                except (ChartGeneratorError, Exception):
                     pass
             raise
         except RuntimeError as e:
@@ -370,7 +370,7 @@ class ChartGenerator:
                 return self.generate_chart(df, signal, timeframe)
             logger.error(f"Runtime error in async chart generation: {e}", exc_info=True)
             return None
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error in async chart generation: {type(e).__name__}: {e}", exc_info=True)
             return None
         finally:
@@ -379,14 +379,14 @@ class ChartGenerator:
                     async with self._task_lock:
                         self._pending_tasks.discard(task_id)
                         logger.debug(f"Untracked chart task {task_id}, remaining: {len(self._pending_tasks)}")
-                except Exception as e:
+                except (ChartGeneratorError, Exception) as e:
                     logger.warning(f"Error untracking task {task_id}: {e}")
             
             if future_id is not None:
                 try:
                     async with self._future_lock:
                         self._active_futures.pop(future_id, None)
-                except Exception as e:
+                except (ChartGeneratorError, Exception) as e:
                     logger.debug(f"Error removing future {future_id}: {e}")
     
     def delete_chart(self, filepath: str):
@@ -413,7 +413,7 @@ class ChartGenerator:
         except PermissionError as e:
             logger.error(f"Permission denied deleting chart {filepath}: {e}")
             return False
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error deleting chart {filepath}: {type(e).__name__}: {e}")
             return False
     
@@ -444,33 +444,33 @@ class ChartGenerator:
                         if hasattr(future, 'cancel'):
                             future.cancel()
                             logger.debug(f"Cancelled active future {future_id}")
-                    except Exception as cancel_err:
+                    except (ChartGeneratorError, Exception) as cancel_err:
                         logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
                 self._active_futures.clear()
                 logger.debug("Cleared active futures dict")
             
             try:
                 self.executor.shutdown(wait=True, cancel_futures=True)
-            except Exception as executor_error:
+            except (ChartGeneratorError, Exception) as executor_error:
                 logger.warning(f"Error during executor shutdown: {executor_error}")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except Exception:
+                except (ChartGeneratorError, Exception):
                     pass
             
             logger.info("ChartGenerator executor shut down successfully")
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error shutting down executor: {e}")
         finally:
             try:
                 self._cleanup_pending_charts()
-            except Exception as cleanup_error:
+            except (ChartGeneratorError, Exception) as cleanup_error:
                 logger.error(f"Error in final cleanup: {cleanup_error}")
             
             try:
                 gc.collect()
                 logger.debug("gc.collect() completed after shutdown")
-            except Exception as gc_error:
+            except (ChartGeneratorError, Exception) as gc_error:
                 logger.debug(f"gc.collect() error: {gc_error}")
     
     async def shutdown_async(self, timeout: Optional[float] = None):
@@ -502,7 +502,7 @@ class ChartGenerator:
                             if hasattr(future, 'cancel'):
                                 future.cancel()
                                 logger.debug(f"Cancelled active future {future_id}")
-                        except Exception as cancel_err:
+                        except (ChartGeneratorError, Exception) as cancel_err:
                             logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
                     self._active_futures.clear()
                     logger.debug("Cleared active futures dict (async)")
@@ -520,28 +520,28 @@ class ChartGenerator:
                 logger.warning(f"Executor shutdown timed out after {effective_timeout}s, forcing shutdown")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except Exception as force_error:
+                except (ChartGeneratorError, Exception) as force_error:
                     logger.error(f"Error forcing executor shutdown: {force_error}")
-            except Exception as executor_error:
+            except (ChartGeneratorError, Exception) as executor_error:
                 logger.error(f"Error during async executor shutdown: {executor_error}")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except Exception:
+                except (ChartGeneratorError, Exception):
                     pass
             
             logger.info("ChartGenerator executor shut down successfully (async)")
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error shutting down executor (async): {e}")
         finally:
             try:
                 self._cleanup_pending_charts()
-            except Exception as cleanup_error:
+            except (ChartGeneratorError, Exception) as cleanup_error:
                 logger.error(f"Error in final cleanup (async): {cleanup_error}")
             
             try:
                 gc.collect()
                 logger.debug("gc.collect() completed after async shutdown")
-            except Exception as gc_error:
+            except (ChartGeneratorError, Exception) as gc_error:
                 logger.debug(f"gc.collect() error (async): {gc_error}")
     
     def _cleanup_pending_charts(self):
@@ -568,12 +568,12 @@ class ChartGenerator:
                     error_detail = f"OSError: {chart_path} - {e}"
                     failed_details.append(error_detail)
                     logger.warning(f"OS error cleaning pending chart {chart_path}: {e}")
-                except Exception as e:
+                except (ChartGeneratorError, Exception) as e:
                     failed += 1
                     error_detail = f"{type(e).__name__}: {chart_path} - {e}"
                     failed_details.append(error_detail)
                     logger.warning(f"Failed to cleanup pending chart {chart_path}: {type(e).__name__}: {e}")
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Critical error during pending charts cleanup: {type(e).__name__}: {e}")
         finally:
             self._pending_charts.clear()
@@ -611,14 +611,14 @@ class ChartGenerator:
                                 os.remove(filepath)
                                 self._pending_charts.discard(filepath)
                                 cleaned += 1
-                        except Exception as e:
+                        except (ChartGeneratorError, Exception) as e:
                             logger.warning(f"Error checking chart age {filepath}: {e}")
             
             if cleaned > 0:
                 logger.info(f"🗑️ Cleaned up {cleaned} orphan chart files (older than {max_age_minutes}min)")
             
             return cleaned
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error cleaning orphan charts: {e}")
             return 0
     
@@ -639,12 +639,12 @@ class ChartGenerator:
                             logger.debug(f"Deleted old chart: {filename}")
                     except FileNotFoundError:
                         pass
-                    except Exception as e:
+                    except (ChartGeneratorError, Exception) as e:
                         logger.warning(f"Error deleting chart {filename}: {e}")
             
             if cleaned > 0:
                 logger.info(f"🗑️ Cleaned up {cleaned} old chart files (older than {days} days)")
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error cleaning up charts: {e}")
     
     def get_stats(self) -> dict:
@@ -668,6 +668,6 @@ class ChartGenerator:
                 'chart_timeout': self.chart_timeout,
                 'shutdown_timeout': self.shutdown_timeout
             }
-        except Exception as e:
+        except (ChartGeneratorError, Exception) as e:
             logger.error(f"Error getting chart stats: {e}")
             return {'error': str(e)}

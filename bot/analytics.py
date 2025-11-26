@@ -156,7 +156,7 @@ class TradingAnalytics:
                 'period_days': days
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error getting trading performance: {e}", exc_info=True)
             return {'error': str(e)}
         finally:
@@ -236,7 +236,7 @@ class TradingAnalytics:
                 'period_days': days
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error getting hourly stats: {e}", exc_info=True)
             return {'error': str(e)}
         finally:
@@ -318,7 +318,7 @@ class TradingAnalytics:
                 'period_days': days
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error getting signal source performance: {e}", exc_info=True)
             return {'error': str(e)}
         finally:
@@ -405,7 +405,7 @@ class TradingAnalytics:
                 'period_days': days
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error getting position tracking stats: {e}", exc_info=True)
             return {'error': str(e)}
         finally:
@@ -501,7 +501,7 @@ class TradingAnalytics:
                 'period_days': days
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error getting risk metrics: {e}", exc_info=True)
             return {'error': str(e)}
         finally:
@@ -537,7 +537,7 @@ class TradingAnalytics:
             logger.info(f"Analytics exported to JSON: {filepath}")
             return True
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error exporting to JSON: {e}", exc_info=True)
             return False
     
@@ -600,7 +600,7 @@ class TradingAnalytics:
             logger.info(f"Trades exported to CSV: {filepath} ({len(trades)} trades)")
             return True
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error exporting to CSV: {e}", exc_info=True)
             return False
         finally:
@@ -658,6 +658,6 @@ class TradingAnalytics:
                 }
             }
             
-        except Exception as e:
+        except (AnalyticsError, Exception) as e:
             logger.error(f"Error preparing visualization data: {e}", exc_info=True)
             return {'error': str(e)}

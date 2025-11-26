@@ -421,7 +421,7 @@ def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> f
     except TypeError as e:
         logger.warning(f"safe_divide: TypeError - invalid operand types: {e}")
         return default
-    except Exception as e:
+    except (UtilityError, Exception) as e:
         logger.error(f"safe_divide: Unexpected error ({type(e).__name__}): {e}")
         return default
 
@@ -457,7 +457,7 @@ def save_json(data: Dict, filepath: str) -> bool:
     except OSError as e:
         logger.error(f"OSError saving JSON to {filepath}: {e}")
         return False
-    except Exception as e:
+    except (UtilityError, Exception) as e:
         logger.error(f"Unexpected error ({type(e).__name__}) saving JSON to {filepath}: {e}")
         return False
 
@@ -484,7 +484,7 @@ def load_json(filepath: str) -> Optional[Dict]:
     except OSError as e:
         logger.error(f"OSError loading JSON from {filepath}: {e}")
         return None
-    except Exception as e:
+    except (UtilityError, Exception) as e:
         logger.error(f"Unexpected error ({type(e).__name__}) loading JSON from {filepath}: {e}")
         return None
 
@@ -493,7 +493,7 @@ def ensure_directory_exists(directory: str) -> bool:
     try:
         os.makedirs(directory, exist_ok=True)
         return True
-    except Exception as e:
+    except (UtilityError, Exception) as e:
         logger.error(f"Error creating directory {directory}: {e}")
         return False
 
@@ -567,7 +567,7 @@ def cleanup_files(directory: str, pattern: str = '*', days_old: int = 7,
     except OSError as e:
         logger.error(f"OSError during cleanup of {directory}: {e}")
         return deleted_count
-    except Exception as e:
+    except (UtilityError, Exception) as e:
         logger.error(f"Unexpected error ({type(e).__name__}) during cleanup: {e}")
         return deleted_count
 

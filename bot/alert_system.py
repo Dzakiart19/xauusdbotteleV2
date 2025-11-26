@@ -277,7 +277,7 @@ class AlertSystem:
         except asyncio.TimeoutError:
             logger.error(f"Timeout sending alert to chat {chat_id} after {SEND_TIMEOUT_SECONDS}s")
             return False
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             error_name = type(e).__name__
             if 'RetryAfter' in error_name or 'Flood' in error_name.lower():
                 retry_after = getattr(e, 'retry_after', 30)
@@ -327,7 +327,7 @@ class AlertSystem:
                                     )
                                     await asyncio.sleep(retry_delay)
                                     self._increment_backoff()
-                        except Exception as e:
+                        except (AlertSystemError, Exception) as e:
                             alert.last_error = str(e)
                             alert.retry_count += 1
                             self._increment_backoff()
@@ -350,7 +350,7 @@ class AlertSystem:
             
             self._remove_processed_alert(alert)
             
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.error(f"Error processing alert: {e}")
             alert.last_error = str(e)
             self._increment_backoff()
@@ -360,7 +360,7 @@ class AlertSystem:
         try:
             new_queue = [a for a in self.alert_queue if a is not alert]
             self.alert_queue = new_queue
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.error(f"Error removing processed alert from queue: {e}")
     
     def _format_alert_message(self, alert: Alert) -> str:
@@ -466,7 +466,7 @@ class AlertSystem:
             
             await self.send_alert(alert)
             
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.error(f"Error sending daily summary: {e}")
     
     async def send_risk_warning(self, warning_type: str, details: str):
@@ -586,7 +586,7 @@ class AlertSystem:
             for alert in self.alert_queue:
                 try:
                     queue_data.append(alert.to_dict())
-                except Exception as e:
+                except (AlertSystemError, Exception) as e:
                     logger.warning(f"Could not serialize alert: {e}")
             
             state = {
@@ -620,7 +620,7 @@ class AlertSystem:
         except OSError as e:
             logger.error(f"OS error saving queue state to {filepath}: {e}")
             return False
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.error(f"Unexpected error saving queue state: {type(e).__name__}: {e}")
             return False
     
@@ -657,7 +657,7 @@ class AlertSystem:
                             f"Queue state is {age_seconds/3600:.1f} hours old, "
                             "some alerts may be stale"
                         )
-                except Exception:
+                except (AlertSystemError, Exception):
                     pass
             
             restored_count = 0
@@ -677,7 +677,7 @@ class AlertSystem:
                             alert.timestamp = datetime.fromisoformat(
                                 timestamp_str.replace('Z', '+00:00')
                             )
-                        except Exception:
+                        except (AlertSystemError, Exception):
                             pass
                     
                     alert.sent = alert_dict.get('sent', False)
@@ -688,7 +688,7 @@ class AlertSystem:
                         self.alert_queue.append(alert)
                         restored_count += 1
                         
-                except Exception as e:
+                except (AlertSystemError, Exception) as e:
                     logger.warning(f"Could not restore alert: {e}")
             
             stats = state.get('stats', {})
@@ -715,7 +715,7 @@ class AlertSystem:
         except PermissionError as e:
             logger.error(f"Permission denied reading queue state from {filepath}: {e}")
             return False
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.error(f"Unexpected error restoring queue state: {type(e).__name__}: {e}")
             return False
     
@@ -729,7 +729,7 @@ class AlertSystem:
                 for ts in call_times
             ]
             return state
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.warning(f"Could not serialize rate limiter state: {e}")
             return {}
     
@@ -747,12 +747,12 @@ class AlertSystem:
                         dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                         if (datetime.now(pytz.UTC) - dt).total_seconds() < time_window:
                             restored_calls.append(dt)
-                    except Exception:
+                    except (AlertSystemError, Exception):
                         pass
                 self.rate_limiter.set_call_times(restored_calls)
                 logger.debug(f"Restored {len(restored_calls)} rate limiter calls")
                 
-        except Exception as e:
+        except (AlertSystemError, Exception) as e:
             logger.warning(f"Could not restore rate limiter state: {e}")
     
     async def periodic_history_cleanup_with_backoff(self):
@@ -786,7 +786,7 @@ class AlertSystem:
                 logger.info("History cleanup task cancelled")
                 self.save_queue_state()
                 raise
-            except Exception as e:
+            except (AlertSystemError, Exception) as e:
                 cleanup_failures += 1
                 self._history_cleanup_failures = cleanup_failures
                 logger.error(

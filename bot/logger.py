@@ -207,7 +207,7 @@ def cleanup_old_logs(log_dir: str = 'logs',
         
         except OSError as e:
             result['errors'].append(f"Error processing {log_file}: {str(e)}")
-        except Exception as e:
+        except (LoggerError, Exception) as e:
             result['errors'].append(f"Unexpected error for {log_file}: {str(e)}")
     
     return result
@@ -506,7 +506,7 @@ def schedule_log_cleanup(log_dir: str = 'logs',
                         f"Log cleanup: deleted {result['deleted_count']} files, "
                         f"freed {result['freed_bytes'] / 1024 / 1024:.2f}MB"
                     )
-            except Exception as e:
+            except (LoggerError, Exception) as e:
                 logger = logging.getLogger('LogCleanup')
                 logger.error(f"Log cleanup error: {e}")
             

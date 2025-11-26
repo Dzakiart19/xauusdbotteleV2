@@ -67,7 +67,7 @@ class DatabaseBackupManager:
             self._rotate_backups()
             return str(backup_file)
             
-        except Exception as e:
+        except (BackupError, Exception) as e:
             logger.error(f"SQLite backup failed: {e}")
             return ""
     
@@ -114,7 +114,7 @@ class DatabaseBackupManager:
         except subprocess.TimeoutExpired:
             logger.error("PostgreSQL backup timeout (300s)")
             return ""
-        except Exception as e:
+        except (BackupError, Exception) as e:
             logger.error(f"PostgreSQL backup failed: {e}")
             return ""
     
@@ -159,7 +159,7 @@ class DatabaseBackupManager:
             logger.info(f"✅ SQLite database restored from: {backup_file}")
             return True
             
-        except Exception as e:
+        except (BackupError, Exception) as e:
             logger.error(f"SQLite restore failed: {e}")
             return False
     
@@ -172,7 +172,7 @@ class DatabaseBackupManager:
                 old_backup.unlink()
                 logger.info(f"Deleted old backup: {old_backup.name}")
                 
-        except Exception as e:
+        except (BackupError, Exception) as e:
             logger.warning(f"Backup rotation failed: {e}")
     
     def list_backups(self) -> List[Dict]:
@@ -194,7 +194,7 @@ class DatabaseBackupManager:
                     'created': mtime.isoformat(),
                     'type': 'postgres' if 'postgres' in backup.name else 'sqlite'
                 })
-        except Exception as e:
+        except (BackupError, Exception) as e:
             logger.error(f"Failed to list backups: {e}")
         
         return backups

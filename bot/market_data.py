@@ -1661,7 +1661,7 @@ class MarketDataClient:
                     try:
                         session.rollback()
                         session.close()
-                    except:
+                    except Exception:
                         pass
                 return False
     
@@ -1777,7 +1777,7 @@ class MarketDataClient:
                 if session is not None:
                     try:
                         session.close()
-                    except:
+                    except Exception:
                         pass
                 self._loading_from_db = False
                 logger.debug("Set _loading_from_db=False - WebSocket tick processing enabled (after error)")
@@ -1857,7 +1857,7 @@ class MarketDataClient:
                 try:
                     session.rollback()
                     session.close()
-                except:
+                except Exception:
                     pass
             return 0
     

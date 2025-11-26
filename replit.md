@@ -71,6 +71,7 @@ The bot's architecture is modular, designed for scalability and maintainability.
   - Line 268: Menggunakan walrus operator untuk null-safe access pada task status
   - Lines 444-461: Ditambahkan pengecekan `if session:` sebelum menggunakan database session
 - **config.py:** Diperbaiki 2 malformed exception handlers dari `except (Exception,):` menjadi `except Exception:`
+- **bot/market_data.py:** Diperbaiki 3 bare `except:` statements menjadi `except Exception:` di lines 1664, 1780, 1860
 
 **LSP Type Safety Improvements - ZERO Errors (Session 1):**
 - **bot/alert_system.py:** Fixed deque vs list type compatibility, migrated to public accessors for RateLimiter state persistence

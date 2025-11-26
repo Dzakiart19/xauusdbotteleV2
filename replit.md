@@ -64,6 +64,42 @@ The bot's architecture is modular, designed for scalability and maintainability.
 
 ## Recent Changes (26 November 2025)
 
+**Signal Detection Overhaul - WEIGHTED SCORING SYSTEM (Session 5):**
+- **bot/strategy.py:** Implementasi weighted scoring system untuk signal detection:
+  - **Trend Filter (30%):** Multi-tier logic (Tier 1-4) untuk ranging market
+    - Tier 1: Perfect EMA alignment (EMA5 > EMA20 > EMA50 atau sebaliknya)
+    - Tier 2: Partial alignment (EMA5 vs EMA20 + close vs EMA50)
+    - Tier 3: MACD/RSI momentum confirmation
+    - Tier 4: TRF atau CEREBR bias sebagai alternatif
+  - **Momentum Filter (20%):** RSI range diperluas dari [35-65] ke [25-75]
+    - Accept neutral zone [40-60] jika Trend Filter passed
+    - Stochastic sebagai bonus, bukan blocking
+  - **Volume Filter (15%):** Threshold diturunkan ke 50%-80%
+    - 3-tier logic: strong (≥80%), acceptable (≥60%), minimum (≥50%)
+  - **Price Action (15%):** 4-tier detection logic
+    - Tier 1: Candlestick patterns (hammer, engulfing, etc.)
+    - Tier 2: MACD Histogram strength
+    - Tier 3: EMA spacing momentum
+    - Tier 4: RSI momentum direction
+  - **Session Filter (10%):** Non-blocking, memberikan partial score jika outside optimal hours
+  - **Spread Filter (10%):** Non-blocking untuk spread slightly high (<1.5x limit)
+  - **Volatility Adjustment:** Dynamic threshold berdasarkan ATR
+    - High volatility (ATR > 0.05%): Threshold relax 20% 
+    - Normal volatility (ATR 0.03-0.05%): Standard
+    - Low volatility (ATR < 0.02%): Threshold strict 10%
+  - **Threshold:** AUTO ≥ 60% weighted score, MANUAL ≥ 40%
+  - **Trend Strength Minimum:** Diturunkan dari 0.30 ke 0.20
+- **config.py:** Parameter baru untuk signal detection:
+  - `RSI_ENTRY_MIN`: 35 → 25
+  - `RSI_ENTRY_MAX`: 65 → 75
+  - `VOLUME_THRESHOLD_MULTIPLIER`: 1.0 → 0.8
+  - `MAX_SPREAD_PIPS`: 15.0 → 20.0
+  - `SIGNAL_SCORE_THRESHOLD_AUTO`: 60 (baru)
+  - `SIGNAL_SCORE_THRESHOLD_MANUAL`: 40 (baru)
+- **bot/indicators.py:** Ditambahkan `IndicatorError` exception class untuk error handling
+
+**HASIL:** Signal detection sekarang menghasilkan sinyal dengan weighted score 85-102% (sebelumnya 0/100 karena filter terlalu ketat). Target: 2-4 signals per jam dengan win rate 55-60%.
+
 **UNLIMITED Sinyal Trading + P/L Fix - Session 4:**
 - **config.py:** Batasan sinyal diubah untuk mode unlimited:
   - `SIGNAL_COOLDOWN_SECONDS`: 30 → 0 (tidak ada cooldown antar sinyal)

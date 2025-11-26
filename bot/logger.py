@@ -27,6 +27,11 @@ LOG_MAX_BYTES_DEFAULT = 5 * 1024 * 1024
 LOG_BACKUP_COUNT_DEFAULT = 5
 LOG_RETENTION_DAYS = 7
 
+
+class LoggerError(Exception):
+    """Base exception for logger errors"""
+    pass
+
 LOG_CONFIG = {
     'main': {'max_bytes': 10 * 1024 * 1024, 'backup_count': 5},
     'strategy': {'max_bytes': 5 * 1024 * 1024, 'backup_count': 5},

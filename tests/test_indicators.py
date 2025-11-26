@@ -178,6 +178,7 @@ class TestIndicatorEngine:
         engine = IndicatorEngine(mock_config)
         indicators = engine.get_indicators(sample_ohlc_data)
         
+        assert indicators is not None, "get_indicators returned None"
         assert 0 <= indicators['rsi'] <= 100
         assert 0 <= indicators['rsi_prev'] <= 100
         assert 0 <= indicators['stoch_k'] <= 100
@@ -200,6 +201,7 @@ class TestIndicatorEngine:
         
         indicators = engine.get_indicators(uptrend_data)
         
+        assert indicators is not None, "get_indicators returned None"
         assert indicators['ema_5'] > indicators['ema_10']
         assert indicators['ema_10'] > indicators['ema_20']
     
@@ -208,6 +210,9 @@ class TestIndicatorEngine:
         
         indicators1 = engine.get_indicators(sample_ohlc_data)
         indicators2 = engine.get_indicators(sample_ohlc_data)
+        
+        assert indicators1 is not None, "get_indicators returned None (first call)"
+        assert indicators2 is not None, "get_indicators returned None (second call)"
         
         for key in indicators1:
             if not pd.isna(indicators1[key]) and not pd.isna(indicators2[key]):

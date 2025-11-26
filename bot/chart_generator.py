@@ -9,6 +9,7 @@ import json
 import asyncio
 import gc
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from bot.logger import setup_logger
 
@@ -17,52 +18,71 @@ logger = setup_logger('ChartGenerator')
 FALLBACK_CHART_TIMEOUT = 60.0
 FALLBACK_SHUTDOWN_TIMEOUT = 30.0
 TIMEOUT_WARNING_THRESHOLD = 0.8
+MAX_DATAFRAME_ROWS = 5000
+LARGE_DATAFRAME_THRESHOLD = 2000
+FILE_CLEANUP_MAX_RETRIES = 3
+FILE_CLEANUP_RETRY_DELAY = 0.5
 
 class ChartError(Exception):
-    """Base exception for chart generation errors"""
+    """Base exception untuk chart generation errors"""
+    pass
+
+class ChartGeneratorError(ChartError):
+    """Exception untuk chart generator errors"""
     pass
 
 class DataValidationError(ChartError):
     """Chart data validation error"""
     pass
 
+class ChartTimeoutError(ChartError):
+    """Exception untuk chart generation timeout"""
+    pass
+
+class ChartCleanupError(ChartError):
+    """Exception untuk chart cleanup errors"""
+    pass
+
 def validate_chart_data(df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
-    """Validate DataFrame for chart generation"""
+    """Validate DataFrame untuk chart generation"""
     try:
         if df is None:
-            return False, "DataFrame is None"
+            return False, "DataFrame adalah None"
         
         if not isinstance(df, pd.DataFrame):
-            return False, f"Invalid type: {type(df)}. Expected pandas.DataFrame"
+            return False, f"Tipe tidak valid: {type(df)}. Diharapkan pandas.DataFrame"
         
         if len(df) < 10:
-            return False, f"Insufficient data: {len(df)} rows (minimum 10 required)"
+            return False, f"Data tidak cukup: {len(df)} baris (minimum 10 diperlukan)"
+        
+        if len(df) > MAX_DATAFRAME_ROWS:
+            return False, f"DataFrame terlalu besar: {len(df)} baris (maksimum {MAX_DATAFRAME_ROWS} baris)"
         
         required_cols = ['open', 'high', 'low', 'close', 'volume']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            return False, f"Missing required columns: {missing_cols}"
+            return False, f"Kolom yang diperlukan tidak ada: {missing_cols}"
         
         for col in ['open', 'high', 'low', 'close']:
             if df[col].isnull().any():
                 null_count = df[col].isnull().sum()
-                return False, f"Column '{col}' contains {null_count} null values"
+                return False, f"Kolom '{col}' mengandung {null_count} nilai null"
             
             if (df[col] <= 0).any():
-                return False, f"Column '{col}' contains non-positive values"
+                return False, f"Kolom '{col}' mengandung nilai non-positif"
         
         if (df['high'] < df['low']).any():
             invalid_count = (df['high'] < df['low']).sum()
-            return False, f"Found {invalid_count} candles where high < low"
+            return False, f"Ditemukan {invalid_count} candle dimana high < low"
         
         if not isinstance(df.index, pd.DatetimeIndex):
             if 'timestamp' not in df.columns:
-                return False, f"Index must be DatetimeIndex or DataFrame must have 'timestamp' column. Got {type(df.index)} with columns: {df.columns.tolist()}"
+                return False, f"Index harus DatetimeIndex atau DataFrame harus memiliki kolom 'timestamp'. Ditemukan {type(df.index)} dengan kolom: {df.columns.tolist()}"
         
         return True, None
         
-    except (ChartGeneratorError, Exception) as e:
-        return False, f"Validation error: {str(e)}"
+    except Exception as e:
+        return False, f"Error validasi: {str(e)}"
 
 class ChartGenerator:
     def __init__(self, config):
@@ -78,48 +98,78 @@ class ChartGenerator:
         self._chart_lock = asyncio.Lock()
         self._task_lock = asyncio.Lock()
         self._future_lock = asyncio.Lock()
+        self._file_lock = asyncio.Lock()
+        self._sync_file_lock = threading.Lock()
+        self._sync_chart_lock = threading.Lock()
         self._timed_out_tasks: set = set()
         
         self.chart_timeout = getattr(config, 'DEFAULT_CHART_TIMEOUT', None)
         if self.chart_timeout is None:
             self.chart_timeout = FALLBACK_CHART_TIMEOUT
-            logger.debug(f"DEFAULT_CHART_TIMEOUT not in config, using fallback: {FALLBACK_CHART_TIMEOUT}s")
+            logger.debug(f"DEFAULT_CHART_TIMEOUT tidak ada di config, menggunakan fallback: {FALLBACK_CHART_TIMEOUT}s")
         
         self.shutdown_timeout = getattr(config, 'DEFAULT_SHUTDOWN_TIMEOUT', None)
         if self.shutdown_timeout is None:
             self.shutdown_timeout = FALLBACK_SHUTDOWN_TIMEOUT
-            logger.debug(f"DEFAULT_SHUTDOWN_TIMEOUT not in config, using fallback: {FALLBACK_SHUTDOWN_TIMEOUT}s")
+            logger.debug(f"DEFAULT_SHUTDOWN_TIMEOUT tidak ada di config, menggunakan fallback: {FALLBACK_SHUTDOWN_TIMEOUT}s")
         
-        logger.info(f"ChartGenerator initialized: max_workers={max_workers}, chart_timeout={self.chart_timeout}s, shutdown_timeout={self.shutdown_timeout}s (FREE_TIER_MODE={self.config.FREE_TIER_MODE})")
+        logger.info(f"ChartGenerator diinisialisasi: max_workers={max_workers}, chart_timeout={self.chart_timeout}s, shutdown_timeout={self.shutdown_timeout}s (FREE_TIER_MODE={self.config.FREE_TIER_MODE})")
+    
+    def _check_dataframe_size(self, df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
+        """Periksa ukuran dataframe dan berikan warning jika terlalu besar"""
+        if df is None:
+            return False, "DataFrame adalah None"
+        
+        row_count = len(df)
+        
+        if row_count > MAX_DATAFRAME_ROWS:
+            return False, f"DataFrame melebihi batas maksimum: {row_count} baris > {MAX_DATAFRAME_ROWS} baris"
+        
+        if row_count > LARGE_DATAFRAME_THRESHOLD:
+            logger.warning(f"⚠️ DataFrame besar terdeteksi: {row_count} baris - proses mungkin memakan waktu lebih lama")
+        
+        return True, None
     
     def generate_chart(self, df: pd.DataFrame, signal: Optional[dict] = None,
                       timeframe: str = 'M1') -> Optional[str]:
-        """Generate chart with comprehensive validation and error handling"""
+        """Generate chart dengan validasi komprehensif dan error handling"""
         chart_path = None
+        start_time = time.monotonic()
+        
         try:
-            is_valid, error_msg = validate_chart_data(df)
-            if not is_valid:
-                logger.warning(f"Chart data validation failed: {error_msg}")
+            size_ok, size_error = self._check_dataframe_size(df)
+            if not size_ok:
+                logger.error(f"Ukuran dataframe tidak valid: {size_error}")
                 return None
             
-            df_copy = df.copy()
+            is_valid, error_msg = validate_chart_data(df)
+            if not is_valid:
+                logger.warning(f"Validasi data chart gagal: {error_msg}")
+                return None
+            
+            with self._sync_chart_lock:
+                df_copy = df.copy()
             
             if not isinstance(df_copy.index, pd.DatetimeIndex):
                 if 'timestamp' in df_copy.columns:
                     try:
                         df_copy['timestamp'] = pd.to_datetime(df_copy['timestamp'])
                         df_copy.set_index('timestamp', inplace=True)
-                    except (ChartGeneratorError, Exception) as e:
-                        logger.error(f"Error converting timestamp to DatetimeIndex: {e}")
+                    except Exception as e:
+                        logger.error(f"Error mengkonversi timestamp ke DatetimeIndex: {e}")
                         return None
                 else:
-                    logger.error("DataFrame has no DatetimeIndex and no 'timestamp' column")
+                    logger.error("DataFrame tidak memiliki DatetimeIndex dan tidak ada kolom 'timestamp'")
                     return None
             
             required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in df_copy.columns for col in required_cols):
-                logger.error(f"Missing required columns. Have: {df_copy.columns.tolist()}, Need: {required_cols}")
+                logger.error(f"Kolom yang diperlukan tidak ada. Dimiliki: {df_copy.columns.tolist()}, Diperlukan: {required_cols}")
                 return None
+            
+            elapsed = time.monotonic() - start_time
+            if elapsed > self.chart_timeout * TIMEOUT_WARNING_THRESHOLD:
+                logger.warning(f"⚠️ Persiapan chart sudah menggunakan {elapsed:.2f}s ({(elapsed/self.chart_timeout)*100:.1f}% dari timeout)")
             
             addplot = []
             
@@ -243,49 +293,52 @@ class ChartGenerator:
                 title += f" ({signal.get('signal', 'SIGNAL')} Signal)"
             
             try:
-                fig, axes = mpf.plot(
-                    df_copy,
-                    type='candle',
-                    style=style,
-                    title=title,
-                    ylabel='Price (USD)',
-                    volume=True,
-                    addplot=addplot if addplot else None,
-                    savefig=filepath,
-                    figsize=(14, 14),
-                    returnfig=True,
-                    panel_ratios=(3, 1, 1, 1)
-                )
+                with self._sync_file_lock:
+                    fig, axes = mpf.plot(
+                        df_copy,
+                        type='candle',
+                        style=style,
+                        title=title,
+                        ylabel='Price (USD)',
+                        volume=True,
+                        addplot=addplot if addplot else None,
+                        savefig=filepath,
+                        figsize=(14, 14),
+                        returnfig=True,
+                        panel_ratios=(3, 1, 1, 1)
+                    )
                 chart_path = filepath
-                logger.info(f"✅ Chart generated successfully: {filepath} ({len(df_copy)} candles)")
                 
-            except (ChartGeneratorError, Exception) as plot_error:
-                logger.error(f"Plotting error: {type(plot_error).__name__}: {plot_error}")
+                elapsed_total = time.monotonic() - start_time
+                logger.info(f"✅ Chart berhasil dibuat: {filepath} ({len(df_copy)} candle) dalam {elapsed_total:.2f}s")
+                
+            except Exception as plot_error:
+                logger.error(f"Error plotting: {type(plot_error).__name__}: {plot_error}")
                 return None
             finally:
                 try:
                     import matplotlib.pyplot as plt
                     plt.close('all')
                     gc.collect()
-                except (ChartGeneratorError, Exception) as cleanup_error:
-                    logger.warning(f"Error during matplotlib cleanup: {cleanup_error}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Error saat cleanup matplotlib: {cleanup_error}")
             
             return chart_path
             
         except MemoryError:
-            logger.error("Memory error generating chart - insufficient memory")
+            logger.error("Memory error saat generate chart - memori tidak cukup")
             try:
                 gc.collect()
-            except (ChartGeneratorError, Exception):
+            except Exception:
                 pass
             return None
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Unexpected error generating chart: {type(e).__name__}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error tidak terduga saat generate chart: {type(e).__name__}: {e}", exc_info=True)
             return None
     
     async def generate_chart_async(self, df: pd.DataFrame, signal: Optional[dict] = None,
                                    timeframe: str = 'M1', timeout: Optional[float] = None) -> Optional[str]:
-        """Generate chart asynchronously with timeout and proper executor cleanup"""
+        """Generate chart secara asynchronous dengan timeout dan proper executor cleanup"""
         task_id = None
         future = None
         future_id = None
@@ -295,12 +348,23 @@ class ChartGenerator:
         
         try:
             if self._shutdown_requested:
-                logger.warning("Chart generation skipped - shutdown in progress")
+                logger.warning("Pembuatan chart dilewati - shutdown sedang berlangsung")
                 return None
             
             if df is None or len(df) < 10:
-                logger.warning(f"Insufficient data for async chart: {len(df) if df is not None else 0} candles")
+                logger.warning(f"Data tidak cukup untuk async chart: {len(df) if df is not None else 0} candle")
                 return None
+            
+            size_ok, size_error = self._check_dataframe_size(df)
+            if not size_ok:
+                logger.error(f"Ukuran dataframe tidak valid untuk async chart: {size_error}")
+                return None
+            
+            if len(df) > LARGE_DATAFRAME_THRESHOLD:
+                adjusted_timeout = effective_timeout * 1.5
+                logger.info(f"DataFrame besar ({len(df)} baris) - menyesuaikan timeout ke {adjusted_timeout:.1f}s")
+                effective_timeout = adjusted_timeout
+                warning_threshold_seconds = effective_timeout * TIMEOUT_WARNING_THRESHOLD
             
             loop = asyncio.get_running_loop()
             
@@ -310,7 +374,7 @@ class ChartGenerator:
             if task_id is not None:
                 async with self._task_lock:
                     self._pending_tasks.add(task_id)
-                    logger.debug(f"Tracking chart task {task_id}, total pending: {len(self._pending_tasks)}")
+                    logger.debug(f"Melacak chart task {task_id}, total pending: {len(self._pending_tasks)}")
             
             future = loop.run_in_executor(
                 self.executor,
@@ -329,92 +393,180 @@ class ChartGenerator:
             elapsed_time = time.monotonic() - start_time
             if elapsed_time > warning_threshold_seconds:
                 pct = (elapsed_time / effective_timeout) * 100
-                logger.warning(f"⚠️ Chart generation took {elapsed_time:.2f}s ({pct:.1f}% of {effective_timeout}s timeout) - consider optimizing or increasing timeout")
+                logger.warning(f"⚠️ Pembuatan chart memakan waktu {elapsed_time:.2f}s ({pct:.1f}% dari {effective_timeout}s timeout) - pertimbangkan optimasi atau tingkatkan timeout")
             
             return result
             
         except asyncio.TimeoutError:
             elapsed_time = time.monotonic() - start_time
-            logger.warning(f"Chart generation timed out after {elapsed_time:.2f}s (limit: {effective_timeout}s)")
+            logger.warning(f"Pembuatan chart timeout setelah {elapsed_time:.2f}s (batas: {effective_timeout}s)")
             
             if future is not None and future_id is not None:
                 async with self._future_lock:
                     self._timed_out_tasks.add(future_id)
-                    logger.debug(f"Added future {future_id} to timed_out_tasks, total: {len(self._timed_out_tasks)}")
+                    logger.debug(f"Menambahkan future {future_id} ke timed_out_tasks, total: {len(self._timed_out_tasks)}")
                 
                 try:
                     if hasattr(future, 'cancel'):
                         future.cancel()
-                        logger.debug(f"Cancelled timed out executor future {future_id}")
-                except (ChartGeneratorError, Exception) as cancel_err:
-                    logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
+                        logger.debug(f"Membatalkan executor future yang timeout {future_id}")
+                except Exception as cancel_err:
+                    logger.debug(f"Tidak dapat membatalkan future {future_id}: {cancel_err}")
                 
                 try:
                     gc.collect()
-                except (ChartGeneratorError, Exception):
+                except Exception:
                     pass
             
             return None
         except asyncio.CancelledError:
-            logger.info("Chart generation cancelled")
+            logger.info("Pembuatan chart dibatalkan")
             if future is not None:
                 try:
                     if hasattr(future, 'cancel'):
                         future.cancel()
-                except (ChartGeneratorError, Exception):
+                except Exception:
                     pass
             raise
         except RuntimeError as e:
             if "no running event loop" in str(e).lower():
-                logger.warning("No running event loop, falling back to sync generation")
+                logger.warning("Tidak ada event loop yang berjalan, fallback ke sync generation")
                 return self.generate_chart(df, signal, timeframe)
-            logger.error(f"Runtime error in async chart generation: {e}", exc_info=True)
+            logger.error(f"Runtime error dalam async chart generation: {e}", exc_info=True)
             return None
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error in async chart generation: {type(e).__name__}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error dalam async chart generation: {type(e).__name__}: {e}", exc_info=True)
             return None
         finally:
             if task_id is not None:
                 try:
                     async with self._task_lock:
                         self._pending_tasks.discard(task_id)
-                        logger.debug(f"Untracked chart task {task_id}, remaining: {len(self._pending_tasks)}")
-                except (ChartGeneratorError, Exception) as e:
-                    logger.warning(f"Error untracking task {task_id}: {e}")
+                        logger.debug(f"Berhenti melacak chart task {task_id}, tersisa: {len(self._pending_tasks)}")
+                except Exception as e:
+                    logger.warning(f"Error saat berhenti melacak task {task_id}: {e}")
             
             if future_id is not None:
                 try:
                     async with self._future_lock:
                         self._active_futures.pop(future_id, None)
-                except (ChartGeneratorError, Exception) as e:
-                    logger.debug(f"Error removing future {future_id}: {e}")
+                except Exception as e:
+                    logger.debug(f"Error menghapus future {future_id}: {e}")
     
-    def delete_chart(self, filepath: str):
-        """Delete chart file with validation and graceful error handling"""
+    def _delete_file_with_retry(self, filepath: str, max_retries: int = FILE_CLEANUP_MAX_RETRIES) -> bool:
+        """Hapus file dengan retry mechanism untuk handle concurrent access"""
+        if not filepath or not isinstance(filepath, str):
+            return False
+        
+        for attempt in range(max_retries):
+            try:
+                if not os.path.exists(filepath):
+                    return True
+                
+                with self._sync_file_lock:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                        logger.debug(f"File berhasil dihapus: {filepath} (percobaan {attempt + 1})")
+                        return True
+                    return True
+                    
+            except PermissionError as e:
+                if attempt < max_retries - 1:
+                    delay = FILE_CLEANUP_RETRY_DELAY * (2 ** attempt)
+                    logger.debug(f"File sedang digunakan, retry dalam {delay:.2f}s: {filepath}")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"Gagal menghapus file setelah {max_retries} percobaan (PermissionError): {filepath}")
+                    return False
+            except FileNotFoundError:
+                return True
+            except OSError as e:
+                if attempt < max_retries - 1:
+                    delay = FILE_CLEANUP_RETRY_DELAY * (2 ** attempt)
+                    logger.debug(f"OSError saat menghapus file, retry dalam {delay:.2f}s: {filepath} - {e}")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"Gagal menghapus file setelah {max_retries} percobaan (OSError): {filepath} - {e}")
+                    return False
+            except Exception as e:
+                logger.error(f"Error tidak terduga saat menghapus file {filepath}: {type(e).__name__}: {e}")
+                return False
+        
+        return False
+    
+    async def _delete_file_with_retry_async(self, filepath: str, max_retries: int = FILE_CLEANUP_MAX_RETRIES) -> bool:
+        """Hapus file secara async dengan retry mechanism untuk handle concurrent access"""
+        if not filepath or not isinstance(filepath, str):
+            return False
+        
+        for attempt in range(max_retries):
+            try:
+                if not os.path.exists(filepath):
+                    return True
+                
+                async with self._file_lock:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                        logger.debug(f"File berhasil dihapus (async): {filepath} (percobaan {attempt + 1})")
+                        return True
+                    return True
+                    
+            except PermissionError as e:
+                if attempt < max_retries - 1:
+                    delay = FILE_CLEANUP_RETRY_DELAY * (2 ** attempt)
+                    logger.debug(f"File sedang digunakan, retry async dalam {delay:.2f}s: {filepath}")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(f"Gagal menghapus file async setelah {max_retries} percobaan (PermissionError): {filepath}")
+                    return False
+            except FileNotFoundError:
+                return True
+            except OSError as e:
+                if attempt < max_retries - 1:
+                    delay = FILE_CLEANUP_RETRY_DELAY * (2 ** attempt)
+                    logger.debug(f"OSError saat menghapus file async, retry dalam {delay:.2f}s: {filepath} - {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(f"Gagal menghapus file async setelah {max_retries} percobaan (OSError): {filepath} - {e}")
+                    return False
+            except Exception as e:
+                logger.error(f"Error tidak terduga saat menghapus file async {filepath}: {type(e).__name__}: {e}")
+                return False
+        
+        return False
+    
+    def delete_chart(self, filepath: str) -> bool:
+        """Hapus file chart dengan validasi dan graceful error handling"""
         try:
             if not filepath or not isinstance(filepath, str):
-                logger.warning(f"Invalid filepath for deletion: {filepath}")
+                logger.warning(f"Filepath tidak valid untuk penghapusan: {filepath}")
                 return False
-            
-            if not os.path.exists(filepath):
-                logger.debug(f"Chart file does not exist (already deleted): {filepath}")
-                return True
             
             if not filepath.endswith('.png'):
-                logger.warning(f"Attempted to delete non-PNG file: {filepath}")
+                logger.warning(f"Mencoba menghapus file non-PNG: {filepath}")
                 return False
             
-            os.remove(filepath)
-            logger.debug(f"Chart deleted: {filepath}")
-            return True
-        except FileNotFoundError:
-            logger.debug(f"Chart file not found (already deleted): {filepath}")
-            return True
-        except PermissionError as e:
-            logger.error(f"Permission denied deleting chart {filepath}: {e}")
+            return self._delete_file_with_retry(filepath)
+            
+        except Exception as e:
+            logger.error(f"Error menghapus chart {filepath}: {type(e).__name__}: {e}")
             return False
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error deleting chart {filepath}: {type(e).__name__}: {e}")
+    
+    async def delete_chart_async(self, filepath: str) -> bool:
+        """Hapus file chart secara async dengan validasi dan graceful error handling"""
+        try:
+            if not filepath or not isinstance(filepath, str):
+                logger.warning(f"Filepath tidak valid untuk penghapusan async: {filepath}")
+                return False
+            
+            if not filepath.endswith('.png'):
+                logger.warning(f"Mencoba menghapus file non-PNG (async): {filepath}")
+                return False
+            
+            return await self._delete_file_with_retry_async(filepath)
+            
+        except Exception as e:
+            logger.error(f"Error menghapus chart async {filepath}: {type(e).__name__}: {e}")
             return False
     
     def shutdown(self, timeout: Optional[float] = None):
@@ -422,55 +574,55 @@ class ChartGenerator:
         effective_timeout = timeout if timeout is not None else self.shutdown_timeout
         
         try:
-            logger.info(f"Shutting down ChartGenerator executor (timeout={effective_timeout}s)...")
+            logger.info(f"Mematikan ChartGenerator executor (timeout={effective_timeout}s)...")
             self._shutdown_requested = True
             
             pending_task_count = len(self._pending_tasks)
             if pending_task_count > 0:
-                logger.info(f"Cancelling {pending_task_count} pending chart tasks...")
+                logger.info(f"Membatalkan {pending_task_count} pending chart tasks...")
                 self._pending_tasks.clear()
             
             timed_out_count = len(self._timed_out_tasks)
             if timed_out_count > 0:
-                logger.warning(f"⚠️ Found {timed_out_count} timed out tasks during shutdown: {list(self._timed_out_tasks)[:10]}{'...' if timed_out_count > 10 else ''}")
+                logger.warning(f"⚠️ Ditemukan {timed_out_count} task yang timeout saat shutdown: {list(self._timed_out_tasks)[:10]}{'...' if timed_out_count > 10 else ''}")
                 self._timed_out_tasks.clear()
-                logger.debug("Cleared timed out tasks set")
+                logger.debug("Set timed out tasks dibersihkan")
             
             active_futures_count = len(self._active_futures)
             if active_futures_count > 0:
-                logger.info(f"Cleaning up {active_futures_count} active futures...")
+                logger.info(f"Membersihkan {active_futures_count} active futures...")
                 for future_id, future in list(self._active_futures.items()):
                     try:
                         if hasattr(future, 'cancel'):
                             future.cancel()
-                            logger.debug(f"Cancelled active future {future_id}")
-                    except (ChartGeneratorError, Exception) as cancel_err:
-                        logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
+                            logger.debug(f"Membatalkan active future {future_id}")
+                    except Exception as cancel_err:
+                        logger.debug(f"Tidak dapat membatalkan future {future_id}: {cancel_err}")
                 self._active_futures.clear()
-                logger.debug("Cleared active futures dict")
+                logger.debug("Dict active futures dibersihkan")
             
             try:
                 self.executor.shutdown(wait=True, cancel_futures=True)
-            except (ChartGeneratorError, Exception) as executor_error:
-                logger.warning(f"Error during executor shutdown: {executor_error}")
+            except Exception as executor_error:
+                logger.warning(f"Error saat executor shutdown: {executor_error}")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except (ChartGeneratorError, Exception):
+                except Exception:
                     pass
             
-            logger.info("ChartGenerator executor shut down successfully")
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error shutting down executor: {e}")
+            logger.info("ChartGenerator executor berhasil dimatikan")
+        except Exception as e:
+            logger.error(f"Error saat mematikan executor: {e}")
         finally:
             try:
                 self._cleanup_pending_charts()
-            except (ChartGeneratorError, Exception) as cleanup_error:
-                logger.error(f"Error in final cleanup: {cleanup_error}")
+            except Exception as cleanup_error:
+                logger.error(f"Error saat final cleanup: {cleanup_error}")
             
             try:
                 gc.collect()
-                logger.debug("gc.collect() completed after shutdown")
-            except (ChartGeneratorError, Exception) as gc_error:
+                logger.debug("gc.collect() selesai setelah shutdown")
+            except Exception as gc_error:
                 logger.debug(f"gc.collect() error: {gc_error}")
     
     async def shutdown_async(self, timeout: Optional[float] = None):
@@ -478,34 +630,34 @@ class ChartGenerator:
         effective_timeout = timeout if timeout is not None else self.shutdown_timeout
         
         try:
-            logger.info(f"Shutting down ChartGenerator (async, timeout={effective_timeout}s)...")
+            logger.info(f"Mematikan ChartGenerator (async, timeout={effective_timeout}s)...")
             self._shutdown_requested = True
             
             async with self._task_lock:
                 pending_count = len(self._pending_tasks)
                 if pending_count > 0:
-                    logger.info(f"Cancelling {pending_count} pending chart tasks...")
+                    logger.info(f"Membatalkan {pending_count} pending chart tasks...")
                 self._pending_tasks.clear()
             
             async with self._future_lock:
                 timed_out_count = len(self._timed_out_tasks)
                 if timed_out_count > 0:
-                    logger.warning(f"⚠️ Found {timed_out_count} timed out tasks during shutdown: {list(self._timed_out_tasks)[:10]}{'...' if timed_out_count > 10 else ''}")
+                    logger.warning(f"⚠️ Ditemukan {timed_out_count} task yang timeout saat shutdown: {list(self._timed_out_tasks)[:10]}{'...' if timed_out_count > 10 else ''}")
                     self._timed_out_tasks.clear()
-                    logger.debug("Cleared timed out tasks set (async)")
+                    logger.debug("Set timed out tasks dibersihkan (async)")
                 
                 active_futures_count = len(self._active_futures)
                 if active_futures_count > 0:
-                    logger.info(f"Cleaning up {active_futures_count} active futures (async)...")
+                    logger.info(f"Membersihkan {active_futures_count} active futures (async)...")
                     for future_id, future in list(self._active_futures.items()):
                         try:
                             if hasattr(future, 'cancel'):
                                 future.cancel()
-                                logger.debug(f"Cancelled active future {future_id}")
-                        except (ChartGeneratorError, Exception) as cancel_err:
-                            logger.debug(f"Could not cancel future {future_id}: {cancel_err}")
+                                logger.debug(f"Membatalkan active future {future_id}")
+                        except Exception as cancel_err:
+                            logger.debug(f"Tidak dapat membatalkan future {future_id}: {cancel_err}")
                     self._active_futures.clear()
-                    logger.debug("Cleared active futures dict (async)")
+                    logger.debug("Dict active futures dibersihkan (async)")
             
             loop = asyncio.get_running_loop()
             try:
@@ -517,31 +669,31 @@ class ChartGenerator:
                     timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"Executor shutdown timed out after {effective_timeout}s, forcing shutdown")
+                logger.warning(f"Executor shutdown timeout setelah {effective_timeout}s, memaksa shutdown")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except (ChartGeneratorError, Exception) as force_error:
-                    logger.error(f"Error forcing executor shutdown: {force_error}")
-            except (ChartGeneratorError, Exception) as executor_error:
-                logger.error(f"Error during async executor shutdown: {executor_error}")
+                except Exception as force_error:
+                    logger.error(f"Error saat memaksa executor shutdown: {force_error}")
+            except Exception as executor_error:
+                logger.error(f"Error saat async executor shutdown: {executor_error}")
                 try:
                     self.executor.shutdown(wait=False, cancel_futures=True)
-                except (ChartGeneratorError, Exception):
+                except Exception:
                     pass
             
-            logger.info("ChartGenerator executor shut down successfully (async)")
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error shutting down executor (async): {e}")
+            logger.info("ChartGenerator executor berhasil dimatikan (async)")
+        except Exception as e:
+            logger.error(f"Error saat mematikan executor (async): {e}")
         finally:
             try:
-                self._cleanup_pending_charts()
-            except (ChartGeneratorError, Exception) as cleanup_error:
-                logger.error(f"Error in final cleanup (async): {cleanup_error}")
+                await self._cleanup_pending_charts_async()
+            except Exception as cleanup_error:
+                logger.error(f"Error saat final cleanup (async): {cleanup_error}")
             
             try:
                 gc.collect()
-                logger.debug("gc.collect() completed after async shutdown")
-            except (ChartGeneratorError, Exception) as gc_error:
+                logger.debug("gc.collect() selesai setelah async shutdown")
+            except Exception as gc_error:
                 logger.debug(f"gc.collect() error (async): {gc_error}")
     
     def _cleanup_pending_charts(self):
@@ -554,44 +706,81 @@ class ChartGenerator:
         try:
             for chart_path in charts_to_cleanup:
                 try:
-                    if chart_path and os.path.exists(chart_path):
-                        os.remove(chart_path)
+                    if self._delete_file_with_retry(chart_path):
                         cleaned += 1
-                        logger.debug(f"Cleaned pending chart: {chart_path}")
-                except PermissionError as e:
-                    failed += 1
-                    error_detail = f"PermissionError: {chart_path} - {e}"
-                    failed_details.append(error_detail)
-                    logger.warning(f"Permission denied cleaning pending chart {chart_path}: {e}")
-                except OSError as e:
-                    failed += 1
-                    error_detail = f"OSError: {chart_path} - {e}"
-                    failed_details.append(error_detail)
-                    logger.warning(f"OS error cleaning pending chart {chart_path}: {e}")
-                except (ChartGeneratorError, Exception) as e:
+                        logger.debug(f"Berhasil membersihkan pending chart: {chart_path}")
+                    else:
+                        failed += 1
+                        failed_details.append(f"Retry gagal: {chart_path}")
+                except Exception as e:
                     failed += 1
                     error_detail = f"{type(e).__name__}: {chart_path} - {e}"
                     failed_details.append(error_detail)
-                    logger.warning(f"Failed to cleanup pending chart {chart_path}: {type(e).__name__}: {e}")
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Critical error during pending charts cleanup: {type(e).__name__}: {e}")
+                    logger.warning(f"Gagal cleanup pending chart {chart_path}: {type(e).__name__}: {e}")
+        except Exception as e:
+            logger.error(f"Error kritis saat cleanup pending charts: {type(e).__name__}: {e}")
         finally:
             self._pending_charts.clear()
             
             if cleaned > 0 or failed > 0:
-                logger.info(f"🗑️ Cleanup pending charts: {cleaned} cleaned, {failed} failed")
+                logger.info(f"🗑️ Cleanup pending charts: {cleaned} berhasil, {failed} gagal")
             
             if failed_details:
-                logger.debug(f"Cleanup failure details: {failed_details}")
+                logger.debug(f"Detail kegagalan cleanup: {failed_details}")
+    
+    async def _cleanup_pending_charts_async(self):
+        """Cleanup semua pending chart files secara async dengan try-finally"""
+        cleaned = 0
+        failed = 0
+        failed_details = []
+        charts_to_cleanup = list(self._pending_charts)
+        
+        try:
+            for chart_path in charts_to_cleanup:
+                try:
+                    if await self._delete_file_with_retry_async(chart_path):
+                        cleaned += 1
+                        logger.debug(f"Berhasil membersihkan pending chart (async): {chart_path}")
+                    else:
+                        failed += 1
+                        failed_details.append(f"Retry gagal (async): {chart_path}")
+                except Exception as e:
+                    failed += 1
+                    error_detail = f"{type(e).__name__}: {chart_path} - {e}"
+                    failed_details.append(error_detail)
+                    logger.warning(f"Gagal cleanup pending chart async {chart_path}: {type(e).__name__}: {e}")
+        except Exception as e:
+            logger.error(f"Error kritis saat cleanup pending charts async: {type(e).__name__}: {e}")
+        finally:
+            self._pending_charts.clear()
+            
+            if cleaned > 0 or failed > 0:
+                logger.info(f"🗑️ Cleanup pending charts (async): {cleaned} berhasil, {failed} gagal")
+            
+            if failed_details:
+                logger.debug(f"Detail kegagalan cleanup (async): {failed_details}")
     
     def track_chart(self, filepath: str):
         """Track chart file untuk cleanup nanti"""
         if filepath:
-            self._pending_charts.add(filepath)
+            with self._sync_chart_lock:
+                self._pending_charts.add(filepath)
+    
+    async def track_chart_async(self, filepath: str):
+        """Track chart file secara async untuk cleanup nanti"""
+        if filepath:
+            async with self._chart_lock:
+                self._pending_charts.add(filepath)
     
     def untrack_chart(self, filepath: str):
         """Untrack chart file setelah berhasil dikirim"""
-        self._pending_charts.discard(filepath)
+        with self._sync_chart_lock:
+            self._pending_charts.discard(filepath)
+    
+    async def untrack_chart_async(self, filepath: str):
+        """Untrack chart file secara async setelah berhasil dikirim"""
+        async with self._chart_lock:
+            self._pending_charts.discard(filepath)
     
     async def cleanup_orphan_charts(self, max_age_minutes: int = 30) -> int:
         """Cleanup orphan chart files yang lebih tua dari max_age"""
@@ -600,7 +789,13 @@ class ChartGenerator:
             cleaned = 0
             
             async with self._chart_lock:
-                for filename in os.listdir(self.chart_dir):
+                try:
+                    files_to_check = os.listdir(self.chart_dir)
+                except OSError as e:
+                    logger.error(f"Tidak dapat membaca direktori chart: {e}")
+                    return 0
+                
+                for filename in files_to_check:
                     filepath = os.path.join(self.chart_dir, filename)
                     if os.path.isfile(filepath) and filename.endswith('.png'):
                         try:
@@ -608,18 +803,19 @@ class ChartGenerator:
                             age_minutes = (now - file_time).total_seconds() / 60
                             
                             if age_minutes > max_age_minutes:
-                                os.remove(filepath)
-                                self._pending_charts.discard(filepath)
-                                cleaned += 1
-                        except (ChartGeneratorError, Exception) as e:
-                            logger.warning(f"Error checking chart age {filepath}: {e}")
+                                if await self._delete_file_with_retry_async(filepath):
+                                    async with self._chart_lock:
+                                        self._pending_charts.discard(filepath)
+                                    cleaned += 1
+                        except Exception as e:
+                            logger.warning(f"Error memeriksa umur chart {filepath}: {e}")
             
             if cleaned > 0:
-                logger.info(f"🗑️ Cleaned up {cleaned} orphan chart files (older than {max_age_minutes}min)")
+                logger.info(f"🗑️ Berhasil membersihkan {cleaned} orphan chart files (lebih tua dari {max_age_minutes} menit)")
             
             return cleaned
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error cleaning orphan charts: {e}")
+        except Exception as e:
+            logger.error(f"Error membersihkan orphan charts: {e}")
             return 0
     
     def cleanup_old_charts(self, days: int = 7):
@@ -627,25 +823,33 @@ class ChartGenerator:
         try:
             now = datetime.now()
             cleaned = 0
-            for filename in os.listdir(self.chart_dir):
+            
+            try:
+                files_to_check = os.listdir(self.chart_dir)
+            except OSError as e:
+                logger.error(f"Tidak dapat membaca direktori chart: {e}")
+                return
+            
+            for filename in files_to_check:
                 filepath = os.path.join(self.chart_dir, filename)
                 if os.path.isfile(filepath):
                     try:
                         file_time = datetime.fromtimestamp(os.path.getmtime(filepath))
                         if (now - file_time).days > days:
-                            os.remove(filepath)
-                            self._pending_charts.discard(filepath)
-                            cleaned += 1
-                            logger.debug(f"Deleted old chart: {filename}")
+                            if self._delete_file_with_retry(filepath):
+                                with self._sync_chart_lock:
+                                    self._pending_charts.discard(filepath)
+                                cleaned += 1
+                                logger.debug(f"Menghapus chart lama: {filename}")
                     except FileNotFoundError:
                         pass
-                    except (ChartGeneratorError, Exception) as e:
-                        logger.warning(f"Error deleting chart {filename}: {e}")
+                    except Exception as e:
+                        logger.warning(f"Error menghapus chart {filename}: {e}")
             
             if cleaned > 0:
-                logger.info(f"🗑️ Cleaned up {cleaned} old chart files (older than {days} days)")
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error cleaning up charts: {e}")
+                logger.info(f"🗑️ Berhasil membersihkan {cleaned} old chart files (lebih tua dari {days} hari)")
+        except Exception as e:
+            logger.error(f"Error membersihkan old charts: {e}")
     
     def get_stats(self) -> dict:
         """Dapatkan statistik chart generator"""
@@ -666,8 +870,10 @@ class ChartGenerator:
                 'shutdown_requested': self._shutdown_requested,
                 'free_tier_mode': self.config.FREE_TIER_MODE,
                 'chart_timeout': self.chart_timeout,
-                'shutdown_timeout': self.shutdown_timeout
+                'shutdown_timeout': self.shutdown_timeout,
+                'max_dataframe_rows': MAX_DATAFRAME_ROWS,
+                'large_dataframe_threshold': LARGE_DATAFRAME_THRESHOLD
             }
-        except (ChartGeneratorError, Exception) as e:
-            logger.error(f"Error getting chart stats: {e}")
+        except Exception as e:
+            logger.error(f"Error mendapatkan statistik chart: {e}")
             return {'error': str(e)}

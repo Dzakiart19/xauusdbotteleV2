@@ -15,6 +15,7 @@ class TaskSchedulerError(Exception):
     pass
 
 
+# Timeout constants (dalam detik)
 TASK_EXECUTION_TIMEOUT = 60
 TASK_CANCEL_TIMEOUT = 5
 SCHEDULER_STOP_TIMEOUT = 10
@@ -23,6 +24,172 @@ STALE_TASK_THRESHOLD_MINUTES = 30
 MAX_CONSECUTIVE_FAILURES_AUTO_DISABLE = 10
 EXCEPTION_HISTORY_LIMIT = 20
 CLEANUP_INTERVAL_SECONDS = 300
+
+# Timeout tambahan untuk cleanup operations yang robust
+CLEANUP_TASK_TIMEOUT = 10  # Timeout untuk setiap cleanup task individual
+CLEANUP_FALLBACK_TIMEOUT = 5  # Timeout untuk fallback cleanup mechanism
+LOCK_ACQUIRE_TIMEOUT = 3  # Timeout untuk acquire lock
+DST_AMBIGUOUS_RESOLUTION = 'earlier'  # Resolusi untuk waktu DST ambigu (earlier/later)
+
+
+def _safe_localize(tz, dt: datetime, is_dst: bool = None) -> datetime:
+    """
+    Localize datetime dengan handling DST yang aman.
+    
+    Args:
+        tz: Timezone pytz
+        dt: Datetime naive yang akan di-localize
+        is_dst: Flag untuk menentukan DST saat ambigu (None untuk auto-detect)
+    
+    Returns:
+        Datetime yang sudah di-localize dengan benar
+    """
+    try:
+        if dt.tzinfo is not None:
+            return dt.astimezone(tz)
+        return tz.localize(dt, is_dst=is_dst)
+    except pytz.exceptions.AmbiguousTimeError:
+        # Waktu ambigu saat DST berakhir (jam mundur)
+        is_dst_fallback = DST_AMBIGUOUS_RESOLUTION == 'later'
+        logger.warning(f"Waktu ambigu terdeteksi: {dt}, menggunakan is_dst={is_dst_fallback}")
+        return tz.localize(dt, is_dst=is_dst_fallback)
+    except pytz.exceptions.NonExistentTimeError:
+        # Waktu tidak ada saat DST dimulai (jam melompat)
+        # Geser waktu ke jam berikutnya yang valid
+        logger.warning(f"Waktu tidak ada (DST gap) terdeteksi: {dt}, menggeser ke waktu valid berikutnya")
+        normalized = tz.normalize(tz.localize(dt, is_dst=True))
+        return normalized
+    except Exception as e:
+        logger.error(f"Error saat localize datetime {dt}: {e}")
+        # Fallback: gunakan UTC dan convert
+        return datetime.now(tz)
+
+
+def _calculate_next_schedule_time_dst_safe(schedule_time: time, tz, now: datetime) -> datetime:
+    """
+    Hitung next_run untuk scheduled task dengan handling DST yang aman.
+    
+    Args:
+        schedule_time: Waktu schedule (time object)
+        tz: Timezone pytz
+        now: Waktu sekarang (timezone-aware)
+    
+    Returns:
+        Datetime next_run yang sudah di-normalize dengan benar
+    """
+    try:
+        # Buat datetime naive untuk target waktu hari ini
+        next_run_naive = now.replace(
+            hour=schedule_time.hour,
+            minute=schedule_time.minute,
+            second=schedule_time.second,
+            microsecond=0,
+            tzinfo=None
+        )
+        
+        # Localize dengan handling DST
+        next_run = _safe_localize(tz, next_run_naive)
+        
+        # Jika sudah lewat, geser ke hari berikutnya
+        if next_run <= now:
+            next_run_naive += timedelta(days=1)
+            next_run = _safe_localize(tz, next_run_naive.replace(tzinfo=None))
+            
+            # Validasi bahwa next_run benar-benar di masa depan setelah normalisasi DST
+            if next_run <= now:
+                # Edge case: DST menyebabkan next_run masih di masa lalu
+                logger.warning(f"DST edge case: next_run {next_run} masih <= now {now}, menambah 1 hari lagi")
+                next_run_naive += timedelta(days=1)
+                next_run = _safe_localize(tz, next_run_naive.replace(tzinfo=None))
+        
+        # Normalize untuk memastikan offset DST yang benar
+        next_run = tz.normalize(next_run)
+        
+        return next_run
+        
+    except Exception as e:
+        logger.error(f"Error saat menghitung next schedule time: {e}")
+        # Fallback: gunakan pendekatan sederhana
+        next_run = now.replace(
+            hour=schedule_time.hour,
+            minute=schedule_time.minute,
+            second=schedule_time.second,
+            microsecond=0
+        )
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        return next_run
+
+
+async def _safe_cleanup_with_timeout(
+    cleanup_func,
+    timeout: float,
+    fallback_func=None,
+    operation_name: str = "cleanup"
+) -> bool:
+    """
+    Jalankan cleanup function dengan timeout dan fallback mechanism.
+    
+    Args:
+        cleanup_func: Async function untuk cleanup
+        timeout: Timeout dalam detik
+        fallback_func: Optional fallback function jika primary gagal
+        operation_name: Nama operasi untuk logging
+    
+    Returns:
+        bool: True jika berhasil, False jika gagal
+    """
+    primary_success = False
+    
+    try:
+        await asyncio.wait_for(cleanup_func(), timeout=timeout)
+        primary_success = True
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout saat {operation_name} setelah {timeout}s")
+    except asyncio.CancelledError:
+        logger.info(f"{operation_name} dibatalkan")
+        raise
+    except Exception as e:
+        logger.error(f"Error saat {operation_name}: {e}")
+    
+    # Jalankan fallback jika primary gagal
+    if not primary_success and fallback_func is not None:
+        try:
+            logger.info(f"Menjalankan fallback untuk {operation_name}...")
+            await asyncio.wait_for(fallback_func(), timeout=CLEANUP_FALLBACK_TIMEOUT)
+            logger.info(f"Fallback {operation_name} berhasil")
+            return True
+        except asyncio.TimeoutError:
+            logger.error(f"Fallback {operation_name} juga timeout")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Error saat fallback {operation_name}: {e}")
+    
+    return False
+
+
+async def _acquire_lock_with_timeout(lock: asyncio.Lock, timeout: float = LOCK_ACQUIRE_TIMEOUT) -> bool:
+    """
+    Acquire lock dengan timeout untuk mencegah deadlock.
+    
+    Args:
+        lock: asyncio.Lock yang akan di-acquire
+        timeout: Timeout dalam detik
+    
+    Returns:
+        bool: True jika berhasil acquire, False jika timeout
+    """
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout saat acquire lock setelah {timeout}s")
+        return False
+    except Exception as e:
+        logger.error(f"Error saat acquire lock: {e}")
+        return False
 
 
 @dataclass
@@ -132,26 +299,49 @@ class ScheduledTask:
         self._calculate_next_run()
     
     def _calculate_next_run(self):
-        now = datetime.now(self.timezone)
+        """
+        Hitung waktu next_run dengan handling DST yang robust.
         
-        if self.schedule_time:
-            next_run = now.replace(
-                hour=self.schedule_time.hour,
-                minute=self.schedule_time.minute,
-                second=self.schedule_time.second,
-                microsecond=0
-            )
+        Menangani edge cases:
+        - DST transition saat jam melompat (non-existent time)
+        - DST transition saat jam mundur (ambiguous time)
+        - Timezone validation
+        """
+        try:
+            now = datetime.now(self.timezone)
             
-            if next_run <= now:
-                next_run += timedelta(days=1)
+            if self.schedule_time:
+                # Gunakan helper function yang DST-safe
+                self.next_run = _calculate_next_schedule_time_dst_safe(
+                    self.schedule_time,
+                    self.timezone,
+                    now
+                )
+                logger.debug(f"Task {self.name}: next_run dihitung = {self.next_run}")
             
-            self.next_run = next_run
-        
-        elif self.interval:
-            if self.last_run:
-                self.next_run = self.last_run + timedelta(seconds=self.interval)
-            else:
-                self.next_run = now
+            elif self.interval:
+                if self.last_run:
+                    # Pastikan last_run memiliki timezone info
+                    if self.last_run.tzinfo is None:
+                        last_run_aware = _safe_localize(self.timezone, self.last_run)
+                    else:
+                        last_run_aware = self.last_run.astimezone(self.timezone)
+                    
+                    self.next_run = last_run_aware + timedelta(seconds=self.interval)
+                    
+                    # Normalize untuk DST transition
+                    self.next_run = self.timezone.normalize(self.next_run)
+                else:
+                    self.next_run = now
+                    
+        except pytz.exceptions.UnknownTimeZoneError as e:
+            logger.error(f"Timezone tidak dikenal untuk task {self.name}: {e}")
+            # Fallback ke UTC
+            self.next_run = datetime.now(pytz.UTC)
+        except Exception as e:
+            logger.error(f"Error menghitung next_run untuk task {self.name}: {e}")
+            # Fallback sederhana
+            self.next_run = datetime.now(self.timezone) + timedelta(seconds=60)
     
     def should_run(self) -> bool:
         if not self.enabled:
@@ -618,59 +808,217 @@ class TaskScheduler:
         return []
     
     async def cleanup_completed_tasks(self) -> int:
-        """Cleanup completed tasks from _active_task_executions.
+        """
+        Cleanup completed tasks dari _active_task_executions dengan robust exception handling.
+        
+        Menggunakan timeout untuk acquire lock dan try-except-finally untuk memastikan
+        cleanup selalu complete meskipun ada exception.
         
         Returns:
-            Number of tasks cleaned up
+            Jumlah task yang dibersihkan
         """
         cleaned = 0
-        async with self._lock:
-            completed_tasks = [t for t in self._active_task_executions if t.done()]
-            for task in completed_tasks:
-                self._active_task_executions.discard(task)
-                cleaned += 1
+        lock_acquired = False
+        
+        try:
+            # Acquire lock dengan timeout untuk mencegah deadlock
+            lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
             
-            completed_tracked = [t for t in self._all_created_tasks if t.done()]
-            for task in completed_tracked:
-                self._all_created_tasks.discard(task)
+            if not lock_acquired:
+                logger.warning("Gagal acquire lock untuk cleanup_completed_tasks, mencoba fallback")
+                # Fallback: lakukan cleanup tanpa lock (less safe tapi lebih baik daripada stuck)
+                return await self._fallback_cleanup_completed_tasks()
+            
+            try:
+                # Cleanup active task executions
+                completed_tasks = [t for t in self._active_task_executions if t.done()]
+                for task in completed_tasks:
+                    try:
+                        self._active_task_executions.discard(task)
+                        cleaned += 1
+                    except Exception as e:
+                        logger.error(f"Error saat discard task dari active executions: {e}")
+                
+                # Cleanup tracked tasks
+                completed_tracked = [t for t in self._all_created_tasks if t.done()]
+                for task in completed_tracked:
+                    try:
+                        self._all_created_tasks.discard(task)
+                    except Exception as e:
+                        logger.error(f"Error saat discard task dari tracked tasks: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Error selama proses cleanup completed tasks: {e}")
+                
+        except asyncio.CancelledError:
+            logger.info("cleanup_completed_tasks dibatalkan")
+            raise
+        except Exception as e:
+            logger.error(f"Error tidak terduga di cleanup_completed_tasks: {e}")
+        finally:
+            # Pastikan lock selalu di-release
+            if lock_acquired:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    # Lock sudah di-release atau tidak locked
+                    pass
+                except Exception as e:
+                    logger.error(f"Error saat release lock: {e}")
         
         if cleaned > 0:
-            logger.debug(f"Cleaned up {cleaned} completed tasks from active executions")
+            logger.debug(f"Membersihkan {cleaned} completed tasks dari active executions")
             self._cleanup_stats['completed_tasks_cleaned'] += cleaned
         
         return cleaned
     
-    async def cleanup_orphaned_tasks(self) -> int:
-        """Cleanup orphaned asyncio tasks that have no corresponding scheduled task.
-        
-        Returns:
-            Number of orphaned tasks cleaned up
+    async def _fallback_cleanup_completed_tasks(self) -> int:
+        """
+        Fallback cleanup untuk completed tasks tanpa lock.
+        Digunakan jika acquire lock gagal.
         """
         cleaned = 0
-        valid_task_names = set(self.tasks.keys())
-        
-        async with self._lock:
-            orphaned = []
-            for task in list(self._all_created_tasks):
-                task_name_match = None
-                if hasattr(task, 'get_name'):
-                    name = task.get_name()
-                    for vtn in valid_task_names:
-                        if vtn in name:
-                            task_name_match = vtn
-                            break
-                
-                if task_name_match is None and not task.done():
-                    orphaned.append(task)
+        try:
+            # Buat salinan untuk iterasi aman
+            tasks_to_check = list(self._active_task_executions)
+            for task in tasks_to_check:
+                try:
+                    if task.done():
+                        self._active_task_executions.discard(task)
+                        cleaned += 1
+                except Exception:
+                    pass
             
-            for task in orphaned:
-                task.cancel()
-                cleaned += 1
-                self._all_created_tasks.discard(task)
+            tracked_to_check = list(self._all_created_tasks)
+            for task in tracked_to_check:
+                try:
+                    if task.done():
+                        self._all_created_tasks.discard(task)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error di fallback cleanup: {e}")
         
         if cleaned > 0:
-            logger.warning(f"Cleaned up {cleaned} orphaned tasks")
+            logger.debug(f"Fallback cleanup: membersihkan {cleaned} tasks")
+        
+        return cleaned
+    
+    async def cleanup_orphaned_tasks(self) -> int:
+        """
+        Cleanup orphaned asyncio tasks yang tidak memiliki scheduled task terkait.
+        
+        Menggunakan try-except-finally dan timeout untuk memastikan cleanup
+        selalu complete bahkan jika ada exception.
+        
+        Returns:
+            Jumlah orphaned tasks yang dibersihkan
+        """
+        cleaned = 0
+        lock_acquired = False
+        orphaned = []
+        
+        try:
+            valid_task_names = set(self.tasks.keys())
+            
+            # Acquire lock dengan timeout
+            lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+            
+            if not lock_acquired:
+                logger.warning("Gagal acquire lock untuk cleanup_orphaned_tasks, mencoba fallback")
+                return await self._fallback_cleanup_orphaned_tasks()
+            
+            try:
+                # Identifikasi orphaned tasks
+                for task in list(self._all_created_tasks):
+                    try:
+                        task_name_match = None
+                        if hasattr(task, 'get_name'):
+                            name = task.get_name()
+                            for vtn in valid_task_names:
+                                if vtn in name:
+                                    task_name_match = vtn
+                                    break
+                        
+                        if task_name_match is None and not task.done():
+                            orphaned.append(task)
+                    except Exception as e:
+                        logger.error(f"Error saat memeriksa task untuk orphan detection: {e}")
+                
+                # Cancel dan cleanup orphaned tasks
+                for task in orphaned:
+                    try:
+                        task.cancel()
+                        cleaned += 1
+                        self._all_created_tasks.discard(task)
+                    except Exception as e:
+                        logger.error(f"Error saat cancel/cleanup orphaned task: {e}")
+                        # Tetap coba discard meski cancel gagal
+                        try:
+                            self._all_created_tasks.discard(task)
+                        except Exception:
+                            pass
+                            
+            except Exception as e:
+                logger.error(f"Error selama proses cleanup orphaned tasks: {e}")
+                
+        except asyncio.CancelledError:
+            logger.info("cleanup_orphaned_tasks dibatalkan")
+            raise
+        except Exception as e:
+            logger.error(f"Error tidak terduga di cleanup_orphaned_tasks: {e}")
+        finally:
+            # Pastikan lock selalu di-release
+            if lock_acquired:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error saat release lock di cleanup_orphaned_tasks: {e}")
+        
+        if cleaned > 0:
+            logger.warning(f"Membersihkan {cleaned} orphaned tasks")
             self._cleanup_stats['orphaned_tasks_cleaned'] += cleaned
+        
+        return cleaned
+    
+    async def _fallback_cleanup_orphaned_tasks(self) -> int:
+        """
+        Fallback cleanup untuk orphaned tasks tanpa lock.
+        Digunakan jika acquire lock gagal.
+        """
+        cleaned = 0
+        try:
+            valid_task_names = set(self.tasks.keys())
+            tasks_to_check = list(self._all_created_tasks)
+            
+            for task in tasks_to_check:
+                try:
+                    if task.done():
+                        continue
+                    
+                    task_name_match = None
+                    if hasattr(task, 'get_name'):
+                        name = task.get_name()
+                        for vtn in valid_task_names:
+                            if vtn in name:
+                                task_name_match = vtn
+                                break
+                    
+                    if task_name_match is None:
+                        task.cancel()
+                        self._all_created_tasks.discard(task)
+                        cleaned += 1
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error di fallback cleanup orphaned: {e}")
+        
+        if cleaned > 0:
+            logger.warning(f"Fallback cleanup: membersihkan {cleaned} orphaned tasks")
         
         return cleaned
     
@@ -762,23 +1110,83 @@ class TaskScheduler:
         }
     
     async def run_aggressive_cleanup(self) -> Dict:
-        """Run aggressive cleanup of all task-related resources.
+        """
+        Jalankan aggressive cleanup untuk semua resources terkait task.
+        
+        Menggunakan timeout untuk setiap operasi cleanup dan fallback mechanism
+        jika cleanup utama gagal.
         
         Returns:
-            Dict with cleanup results
+            Dict dengan hasil cleanup
         """
-        logger.info("Running aggressive cleanup...")
+        logger.info("Menjalankan aggressive cleanup...")
         
-        completed_cleaned = await self.cleanup_completed_tasks()
-        orphaned_cleaned = await self.cleanup_orphaned_tasks()
-        stale_tasks = self.detect_stale_tasks()
-        failing_tasks = self.detect_high_failure_tasks()
+        completed_cleaned = 0
+        orphaned_cleaned = 0
+        stale_tasks = []
+        failing_tasks = []
+        cleanup_errors = []
         
-        gc.collect()
+        # Cleanup completed tasks dengan timeout dan fallback
+        try:
+            cleanup_success = await _safe_cleanup_with_timeout(
+                cleanup_func=self.cleanup_completed_tasks,
+                timeout=CLEANUP_TASK_TIMEOUT,
+                fallback_func=self._fallback_cleanup_completed_tasks,
+                operation_name="cleanup completed tasks"
+            )
+            if cleanup_success:
+                # Ambil nilai dari stats yang sudah diupdate
+                completed_cleaned = self._cleanup_stats.get('completed_tasks_cleaned', 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            cleanup_errors.append(f"cleanup_completed: {e}")
+            logger.error(f"Error saat cleanup completed tasks: {e}")
         
-        now = datetime.now(pytz.timezone('Asia/Jakarta'))
-        self._cleanup_stats['last_cleanup_time'] = now.isoformat()
-        self._last_cleanup = now
+        # Cleanup orphaned tasks dengan timeout dan fallback
+        try:
+            cleanup_success = await _safe_cleanup_with_timeout(
+                cleanup_func=self.cleanup_orphaned_tasks,
+                timeout=CLEANUP_TASK_TIMEOUT,
+                fallback_func=self._fallback_cleanup_orphaned_tasks,
+                operation_name="cleanup orphaned tasks"
+            )
+            if cleanup_success:
+                orphaned_cleaned = self._cleanup_stats.get('orphaned_tasks_cleaned', 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            cleanup_errors.append(f"cleanup_orphaned: {e}")
+            logger.error(f"Error saat cleanup orphaned tasks: {e}")
+        
+        # Detect stale dan failing tasks (operasi sync, tidak perlu timeout)
+        try:
+            stale_tasks = self.detect_stale_tasks()
+        except Exception as e:
+            cleanup_errors.append(f"detect_stale: {e}")
+            logger.error(f"Error saat detect stale tasks: {e}")
+        
+        try:
+            failing_tasks = self.detect_high_failure_tasks()
+        except Exception as e:
+            cleanup_errors.append(f"detect_failing: {e}")
+            logger.error(f"Error saat detect failing tasks: {e}")
+        
+        # Garbage collection dengan protection
+        try:
+            gc.collect()
+        except Exception as e:
+            logger.warning(f"Error saat garbage collection: {e}")
+        
+        # Update stats
+        try:
+            now = datetime.now(pytz.timezone('Asia/Jakarta'))
+            self._cleanup_stats['last_cleanup_time'] = now.isoformat()
+            self._last_cleanup = now
+        except Exception as e:
+            logger.error(f"Error saat update cleanup stats: {e}")
+            now = datetime.now(pytz.UTC)
         
         results = {
             'completed_tasks_cleaned': completed_cleaned,
@@ -786,35 +1194,116 @@ class TaskScheduler:
             'stale_tasks': stale_tasks,
             'failing_tasks': failing_tasks,
             'auto_disabled_tasks': self.get_auto_disabled_tasks(),
+            'cleanup_errors': cleanup_errors,
             'timestamp': now.isoformat()
         }
         
-        logger.info(f"Aggressive cleanup completed: {results}")
+        if cleanup_errors:
+            logger.warning(f"Aggressive cleanup selesai dengan {len(cleanup_errors)} error: {results}")
+        else:
+            logger.info(f"Aggressive cleanup selesai: {results}")
+        
         return results
     
     async def _cleanup_loop(self):
-        """Background loop for periodic cleanup."""
-        logger.info(f"Cleanup loop started (interval: {self._cleanup_interval}s)")
+        """
+        Background loop untuk periodic cleanup dengan robust exception handling.
+        
+        Loop ini akan terus berjalan meskipun ada exception di cleanup operations.
+        Menggunakan fallback mechanism untuk memastikan cleanup selalu terjadi.
+        """
+        logger.info(f"Cleanup loop dimulai (interval: {self._cleanup_interval}s)")
+        consecutive_errors = 0
+        max_consecutive_errors = 5
         
         try:
             while self.running and not self._shutdown_flag.is_set():
                 try:
-                    await asyncio.wait_for(
-                        self._shutdown_flag.wait(),
-                        timeout=float(self._cleanup_interval)
-                    )
-                    if self._shutdown_flag.is_set():
-                        break
-                except asyncio.TimeoutError:
+                    # Tunggu shutdown flag atau timeout
+                    try:
+                        await asyncio.wait_for(
+                            self._shutdown_flag.wait(),
+                            timeout=float(self._cleanup_interval)
+                        )
+                        if self._shutdown_flag.is_set():
+                            logger.info("Shutdown flag terdeteksi, keluar dari cleanup loop")
+                            break
+                    except asyncio.TimeoutError:
+                        # Timeout adalah kondisi normal, lanjutkan ke cleanup
+                        pass
+                    
+                    # Jalankan cleanup jika tidak dalam shutdown
                     if not self._shutdown_flag.is_set():
                         try:
-                            await self.run_aggressive_cleanup()
+                            await asyncio.wait_for(
+                                self.run_aggressive_cleanup(),
+                                timeout=CLEANUP_TASK_TIMEOUT * 3  # Berikan waktu lebih untuk aggressive cleanup
+                            )
+                            consecutive_errors = 0  # Reset counter setelah sukses
+                        except asyncio.TimeoutError:
+                            consecutive_errors += 1
+                            logger.warning(f"Aggressive cleanup timeout, consecutive errors: {consecutive_errors}")
+                            # Coba fallback cleanup sederhana
+                            await self._emergency_cleanup()
                         except (TaskSchedulerError, Exception) as e:
-                            logger.error(f"Error during cleanup: {e}")
+                            consecutive_errors += 1
+                            logger.error(f"Error saat cleanup: {e}, consecutive errors: {consecutive_errors}")
+                            # Coba fallback cleanup sederhana
+                            await self._emergency_cleanup()
+                        
+                        # Jika terlalu banyak error berturut-turut, kurangi frekuensi cleanup
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.warning(f"Terlalu banyak cleanup errors ({consecutive_errors}), mengurangi frekuensi")
+                            await asyncio.sleep(self._cleanup_interval * 2)  # Tambah delay
+                            
+                except asyncio.CancelledError:
+                    logger.info("Cleanup loop iteration dibatalkan")
+                    raise
+                except Exception as e:
+                    # Catch-all untuk exception yang tidak terduga
+                    consecutive_errors += 1
+                    logger.error(f"Exception tidak terduga di cleanup loop: {e}")
+                    if not self._shutdown_flag.is_set():
+                        await asyncio.sleep(5)  # Brief pause before retry
+                        
         except asyncio.CancelledError:
-            logger.info("Cleanup loop cancelled")
+            logger.info("Cleanup loop dibatalkan")
+        except Exception as e:
+            logger.error(f"Fatal error di cleanup loop: {e}")
         finally:
-            logger.info("Cleanup loop exiting")
+            # Final cleanup sebelum keluar
+            try:
+                await self._emergency_cleanup()
+            except Exception as e:
+                logger.error(f"Error saat final cleanup: {e}")
+            logger.info("Cleanup loop selesai")
+    
+    async def _emergency_cleanup(self) -> None:
+        """
+        Emergency cleanup sederhana yang dijamin tidak akan stuck.
+        Digunakan sebagai fallback jika cleanup utama gagal.
+        """
+        try:
+            # Cleanup minimal tanpa lock
+            tasks_to_check = list(self._active_task_executions)
+            for task in tasks_to_check:
+                try:
+                    if task.done():
+                        self._active_task_executions.discard(task)
+                except Exception:
+                    pass
+            
+            tracked_to_check = list(self._all_created_tasks)
+            for task in tracked_to_check:
+                try:
+                    if task.done():
+                        self._all_created_tasks.discard(task)
+                except Exception:
+                    pass
+                    
+            logger.debug("Emergency cleanup selesai")
+        except Exception as e:
+            logger.error(f"Error di emergency cleanup: {e}")
     
     def enable_task_with_reset(self, name: str) -> bool:
         """Enable a task and reset its failure counters.
@@ -831,197 +1320,407 @@ class TaskScheduler:
         return False
     
     async def _track_task(self, task: asyncio.Task, task_name: str):
-        """Track a task and handle its completion with exception draining."""
-        async with self._lock:
-            self._active_task_executions.add(task)
-            self._all_created_tasks.add(task)
-            self._completion_event.clear()
+        """
+        Track task dan handle completion dengan exception draining yang robust.
         
+        Menggunakan lock dengan timeout untuk mencegah deadlock dan
+        try-except-finally untuk memastikan cleanup selalu terjadi.
+        """
+        lock_acquired = False
+        
+        # Tambahkan task ke tracking dengan timeout lock
+        try:
+            lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+            if lock_acquired:
+                try:
+                    self._active_task_executions.add(task)
+                    self._all_created_tasks.add(task)
+                    self._completion_event.clear()
+                finally:
+                    try:
+                        self._lock.release()
+                        lock_acquired = False
+                    except RuntimeError:
+                        pass
+            else:
+                # Fallback tanpa lock
+                logger.warning(f"Gagal acquire lock untuk track task {task_name}, menggunakan fallback")
+                self._active_task_executions.add(task)
+                self._all_created_tasks.add(task)
+                self._completion_event.clear()
+        except Exception as e:
+            logger.error(f"Error saat menambahkan task {task_name} ke tracking: {e}")
+        
+        # Tunggu task selesai
         try:
             await task
         except asyncio.CancelledError:
-            logger.debug(f"Tracked task {task_name} was cancelled")
-        except (TaskSchedulerError, Exception) as e:
-            self._task_exceptions[task_name] = e
-            logger.error(f"Tracked task {task_name} failed: {e}")
+            logger.debug(f"Tracked task {task_name} dibatalkan")
+        except Exception as e:
+            try:
+                self._task_exceptions[task_name] = e
+                self.record_exception(task_name, e)
+            except Exception:
+                pass
+            logger.error(f"Tracked task {task_name} gagal: {e}")
         finally:
-            async with self._lock:
-                self._active_task_executions.discard(task)
-                self._all_created_tasks.discard(task)
-                if len(self._active_task_executions) == 0:
-                    self._completion_event.set()
+            # Cleanup tracking dengan timeout lock
+            try:
+                lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+                if lock_acquired:
+                    try:
+                        self._active_task_executions.discard(task)
+                        self._all_created_tasks.discard(task)
+                        if len(self._active_task_executions) == 0:
+                            self._completion_event.set()
+                    finally:
+                        try:
+                            self._lock.release()
+                        except RuntimeError:
+                            pass
+                else:
+                    # Fallback cleanup tanpa lock
+                    self._active_task_executions.discard(task)
+                    self._all_created_tasks.discard(task)
+                    if len(self._active_task_executions) == 0:
+                        self._completion_event.set()
+            except Exception as e:
+                logger.error(f"Error saat cleanup tracking untuk task {task_name}: {e}")
+                # Emergency cleanup
+                try:
+                    self._active_task_executions.discard(task)
+                    self._all_created_tasks.discard(task)
+                except Exception:
+                    pass
     
     async def flush_pending_tasks(self, timeout: float = FLUSH_PENDING_TIMEOUT) -> bool:
-        """Wait for all pending task executions to complete.
+        """
+        Tunggu semua pending task executions selesai dengan robust exception handling.
         
         Args:
-            timeout: Maximum time to wait in seconds
+            timeout: Waktu maksimum untuk menunggu dalam detik
             
         Returns:
-            bool: True if all tasks completed, False if timeout occurred
+            bool: True jika semua tasks selesai, False jika timeout terjadi
         """
-        async with self._lock:
-            if not self._active_task_executions:
-                return True
+        pending_count = 0
+        
+        # Check pending count dengan timeout lock
+        try:
+            lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+            if lock_acquired:
+                try:
+                    if not self._active_task_executions:
+                        return True
+                    pending_count = len(self._active_task_executions)
+                finally:
+                    try:
+                        self._lock.release()
+                    except RuntimeError:
+                        pass
+            else:
+                # Fallback tanpa lock
+                if not self._active_task_executions:
+                    return True
+                pending_count = len(self._active_task_executions)
+        except Exception as e:
+            logger.error(f"Error saat check pending tasks: {e}")
             pending_count = len(self._active_task_executions)
         
         logger.info(f"Flushing {pending_count} pending task executions (timeout={timeout}s)...")
         
         try:
             await asyncio.wait_for(self._completion_event.wait(), timeout=timeout)
-            logger.info("All pending task executions completed")
+            logger.info("Semua pending task executions selesai")
             return True
         except asyncio.TimeoutError:
-            async with self._lock:
+            try:
+                lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+                if lock_acquired:
+                    try:
+                        remaining = len(self._active_task_executions)
+                    finally:
+                        try:
+                            self._lock.release()
+                        except RuntimeError:
+                            pass
+                else:
+                    remaining = len(self._active_task_executions)
+            except Exception:
                 remaining = len(self._active_task_executions)
-            logger.warning(f"Flush timeout: {remaining} tasks still pending after {timeout}s")
+            
+            logger.warning(f"Flush timeout: {remaining} tasks masih pending setelah {timeout}s")
+            return False
+        except asyncio.CancelledError:
+            logger.info("flush_pending_tasks dibatalkan")
+            raise
+        except Exception as e:
+            logger.error(f"Error tidak terduga di flush_pending_tasks: {e}")
             return False
     
     async def _scheduler_loop(self):
-        logger.info("Scheduler loop started")
+        """
+        Loop utama scheduler dengan robust exception handling.
+        
+        Loop ini akan terus berjalan dan menjadwalkan tasks meskipun
+        ada exception di individual task executions.
+        """
+        logger.info("Scheduler loop dimulai")
+        consecutive_errors = 0
+        max_consecutive_errors = 10
         
         try:
             while self.running and not self._shutdown_flag.is_set():
                 try:
                     if self._shutdown_flag.is_set():
-                        logger.info("Shutdown flag detected in scheduler loop")
+                        logger.info("Shutdown flag terdeteksi di scheduler loop")
                         break
                     
+                    # Jalankan semua task yang siap dengan error handling per-task
                     for task in list(self.tasks.values()):
                         if self._shutdown_flag.is_set():
-                            logger.info("Shutdown flag detected, stopping task scheduling")
+                            logger.info("Shutdown flag terdeteksi, menghentikan penjadwalan task")
                             break
                         
-                        if task.should_run():
-                            def make_done_callback(task_name: str):
-                                def callback(t: asyncio.Task):
-                                    self._on_task_done(t, task_name)
-                                return callback
-                            
-                            execution_task = asyncio.create_task(
-                                task.execute(
-                                    alert_system=self.alert_system,
-                                    shutdown_flag=self._shutdown_flag,
-                                    on_complete=lambda t, n: None
-                                )
-                            )
-                            execution_task.set_name(f"task_exec_{task.name}")
-                            execution_task.add_done_callback(make_done_callback(task.name))
-                            
-                            tracking_task = asyncio.create_task(
-                                self._track_task(execution_task, task.name)
-                            )
-                            tracking_task.set_name(f"track_{task.name}")
+                        try:
+                            if task.should_run():
+                                def make_done_callback(task_name: str):
+                                    def callback(t: asyncio.Task):
+                                        try:
+                                            self._on_task_done(t, task_name)
+                                        except Exception as cb_err:
+                                            logger.error(f"Error di done callback untuk {task_name}: {cb_err}")
+                                    return callback
+                                
+                                try:
+                                    execution_task = asyncio.create_task(
+                                        task.execute(
+                                            alert_system=self.alert_system,
+                                            shutdown_flag=self._shutdown_flag,
+                                            on_complete=lambda t, n: None
+                                        )
+                                    )
+                                    execution_task.set_name(f"task_exec_{task.name}")
+                                    execution_task.add_done_callback(make_done_callback(task.name))
+                                    
+                                    tracking_task = asyncio.create_task(
+                                        self._track_task(execution_task, task.name)
+                                    )
+                                    tracking_task.set_name(f"track_{task.name}")
+                                except Exception as e:
+                                    logger.error(f"Error saat membuat task execution untuk {task.name}: {e}")
+                        except Exception as e:
+                            logger.error(f"Error saat memeriksa/menjalankan task {task.name}: {e}")
+                            # Lanjutkan ke task berikutnya, jangan crash scheduler
                     
+                    # Reset consecutive errors setelah iterasi sukses
+                    consecutive_errors = 0
+                    
+                    # Tunggu shutdown flag atau timeout
                     try:
                         await asyncio.wait_for(
                             self._shutdown_flag.wait(),
                             timeout=1.0
                         )
                         if self._shutdown_flag.is_set():
-                            logger.info("Shutdown flag set, exiting scheduler loop")
+                            logger.info("Shutdown flag di-set, keluar dari scheduler loop")
                             break
                     except asyncio.TimeoutError:
                         pass
                     
                 except asyncio.CancelledError:
-                    logger.info("Scheduler loop cancelled")
+                    logger.info("Scheduler loop dibatalkan")
                     break
-                except (TaskSchedulerError, Exception) as e:
-                    logger.error(f"Error in scheduler loop: {e}")
+                except Exception as e:
+                    consecutive_errors += 1
+                    logger.error(f"Error di scheduler loop: {e} (consecutive errors: {consecutive_errors})")
+                    
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.critical(f"Terlalu banyak errors ({consecutive_errors}), mengurangi frekuensi scheduling")
+                    
                     if not self._shutdown_flag.is_set():
-                        await asyncio.sleep(5)
+                        # Exponential backoff untuk errors
+                        sleep_time = min(5 * consecutive_errors, 60)
+                        await asyncio.sleep(sleep_time)
+                        
         except asyncio.CancelledError:
-            logger.info("Scheduler loop received cancellation at top level")
+            logger.info("Scheduler loop menerima cancellation di top level")
+        except Exception as e:
+            logger.critical(f"Fatal error di scheduler loop: {e}")
         finally:
-            logger.info("Scheduler loop exiting")
+            logger.info("Scheduler loop selesai")
     
     async def start(self):
+        """
+        Mulai task scheduler dengan scheduler loop dan cleanup loop.
+        """
         if self.running:
-            logger.warning("Scheduler already running")
+            logger.warning("Scheduler sudah berjalan")
             return
         
-        self._shutdown_flag.clear()
-        self._completion_event.clear()
-        self.running = True
-        self.scheduler_task = asyncio.create_task(self._scheduler_loop())
-        self.scheduler_task.set_name("scheduler_loop")
-        
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        self._cleanup_task.set_name("cleanup_loop")
-        
-        logger.info("Task scheduler started with cleanup loop")
+        try:
+            self._shutdown_flag.clear()
+            self._completion_event.clear()
+            self.running = True
+            
+            self.scheduler_task = asyncio.create_task(self._scheduler_loop())
+            self.scheduler_task.set_name("scheduler_loop")
+            
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            self._cleanup_task.set_name("cleanup_loop")
+            
+            logger.info("Task scheduler dimulai dengan cleanup loop")
+        except Exception as e:
+            logger.error(f"Error saat memulai scheduler: {e}")
+            self.running = False
+            raise
     
     async def stop(self, graceful_timeout: float = SCHEDULER_STOP_TIMEOUT):
-        """Stop the scheduler with graceful shutdown.
+        """
+        Stop scheduler dengan graceful shutdown dan robust exception handling.
+        
+        Semua operasi cleanup dibungkus dengan try-except-finally untuk memastikan
+        cleanup selalu complete meskipun ada exception.
         
         Args:
-            graceful_timeout: Maximum time to wait for graceful shutdown
+            graceful_timeout: Waktu maksimum untuk menunggu graceful shutdown
         """
         logger.info("=" * 50)
-        logger.info("STOPPING TASK SCHEDULER")
+        logger.info("MENGHENTIKAN TASK SCHEDULER")
         logger.info(f"Active task executions: {len(self._active_task_executions)}")
         logger.info(f"Total tracked tasks: {len(self._all_created_tasks)}")
         logger.info("=" * 50)
         
         if not self.running:
-            logger.warning("Scheduler not running")
+            logger.warning("Scheduler tidak berjalan")
             return
         
+        # Set shutdown flag terlebih dahulu
         self._shutdown_flag.set()
         self.running = False
         
-        logger.info("Shutdown flag set, waiting for scheduler loop to stop...")
+        logger.info("Shutdown flag di-set, menunggu scheduler loop berhenti...")
         
+        # 1. Hentikan cleanup loop dengan timeout dan fallback
+        try:
+            await self._stop_cleanup_loop()
+        except Exception as e:
+            logger.error(f"Error saat menghentikan cleanup loop: {e}")
+        
+        # 2. Hentikan scheduler loop dengan timeout dan fallback
+        try:
+            await self._stop_scheduler_loop()
+        except Exception as e:
+            logger.error(f"Error saat menghentikan scheduler loop: {e}")
+        
+        # 3. Cancel individual task executions dengan proper error handling
+        try:
+            await self._cancel_individual_tasks()
+        except Exception as e:
+            logger.error(f"Error saat cancel individual tasks: {e}")
+        
+        # 4. Cancel active task executions dengan timeout
+        try:
+            await self._cancel_active_executions(graceful_timeout)
+        except Exception as e:
+            logger.error(f"Error saat cancel active executions: {e}")
+        
+        # 5. Final cleanup dengan fallback
+        try:
+            await self._final_cleanup()
+        except Exception as e:
+            logger.error(f"Error saat final cleanup: {e}")
+            # Emergency cleanup jika final cleanup gagal
+            await self._emergency_stop_cleanup()
+        
+        # Log hasil akhir
+        self._log_stop_summary()
+    
+    async def _stop_cleanup_loop(self) -> None:
+        """Hentikan cleanup loop dengan timeout protection."""
         if self._cleanup_task and not self._cleanup_task.done():
-            logger.info("Cancelling cleanup loop task...")
+            logger.info("Membatalkan cleanup loop task...")
             self._cleanup_task.cancel()
             try:
                 await asyncio.wait_for(self._cleanup_task, timeout=TASK_CANCEL_TIMEOUT)
-                logger.info("✅ Cleanup loop stopped gracefully")
+                logger.info("✅ Cleanup loop berhenti dengan graceful")
             except asyncio.TimeoutError:
-                logger.warning(f"Cleanup loop cancellation timed out after {TASK_CANCEL_TIMEOUT}s")
+                logger.warning(f"Pembatalan cleanup loop timeout setelah {TASK_CANCEL_TIMEOUT}s")
             except asyncio.CancelledError:
-                logger.info("✅ Cleanup loop cancelled")
-            except (TaskSchedulerError, Exception) as e:
-                logger.error(f"Error stopping cleanup loop: {e}")
-        
+                logger.info("✅ Cleanup loop dibatalkan")
+            except Exception as e:
+                logger.error(f"Error saat menghentikan cleanup loop: {e}")
+    
+    async def _stop_scheduler_loop(self) -> None:
+        """Hentikan scheduler loop dengan timeout protection."""
         if self.scheduler_task and not self.scheduler_task.done():
-            logger.info("Cancelling scheduler loop task...")
+            logger.info("Membatalkan scheduler loop task...")
             self.scheduler_task.cancel()
             try:
                 await asyncio.wait_for(self.scheduler_task, timeout=TASK_CANCEL_TIMEOUT)
-                logger.info("✅ Scheduler loop stopped gracefully")
+                logger.info("✅ Scheduler loop berhenti dengan graceful")
             except asyncio.TimeoutError:
-                logger.warning(f"Scheduler loop cancellation timed out after {TASK_CANCEL_TIMEOUT}s")
+                logger.warning(f"Pembatalan scheduler loop timeout setelah {TASK_CANCEL_TIMEOUT}s")
             except asyncio.CancelledError:
-                logger.info("✅ Scheduler loop cancelled")
-            except (TaskSchedulerError, Exception) as e:
-                logger.error(f"Error stopping scheduler loop: {e}")
-        
-        logger.info("Cancelling individual task executions...")
+                logger.info("✅ Scheduler loop dibatalkan")
+            except Exception as e:
+                logger.error(f"Error saat menghentikan scheduler loop: {e}")
+    
+    async def _cancel_individual_tasks(self) -> None:
+        """Cancel semua individual task executions dengan error handling per-task."""
+        logger.info("Membatalkan individual task executions...")
         cancelled_count = 0
-        for task_name, task in self.tasks.items():
-            if task._is_executing:
-                logger.info(f"Cancelling running task: {task_name}")
-                success = await task.cancel_execution(timeout=TASK_CANCEL_TIMEOUT)
-                if success:
-                    cancelled_count += 1
-                else:
-                    logger.warning(f"Failed to cancel task: {task_name}")
-        logger.info(f"Cancelled {cancelled_count} individual task executions")
         
-        async with self._lock:
+        for task_name, task in list(self.tasks.items()):
+            if task._is_executing:
+                try:
+                    logger.info(f"Membatalkan running task: {task_name}")
+                    success = await asyncio.wait_for(
+                        task.cancel_execution(timeout=TASK_CANCEL_TIMEOUT),
+                        timeout=TASK_CANCEL_TIMEOUT + 1  # Sedikit lebih lama
+                    )
+                    if success:
+                        cancelled_count += 1
+                    else:
+                        logger.warning(f"Gagal membatalkan task: {task_name}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout saat membatalkan task: {task_name}")
+                except Exception as e:
+                    logger.error(f"Error saat membatalkan task {task_name}: {e}")
+        
+        logger.info(f"Membatalkan {cancelled_count} individual task executions")
+    
+    async def _cancel_active_executions(self, graceful_timeout: float) -> None:
+        """Cancel active task executions dengan timeout dan fallback."""
+        # Gunakan lock dengan timeout
+        lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
+        
+        if lock_acquired:
+            try:
+                active_tasks = list(self._active_task_executions)
+            finally:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+        else:
+            # Fallback tanpa lock
+            logger.warning("Gagal acquire lock, menggunakan fallback untuk active executions")
             active_tasks = list(self._active_task_executions)
         
         active_count = len(active_tasks)
         if active_count > 0:
-            logger.info(f"Cancelling {active_count} remaining active task executions...")
+            logger.info(f"Membatalkan {active_count} remaining active task executions...")
             
+            # Cancel semua task
             for task_exec in active_tasks:
-                if not task_exec.done():
-                    task_exec.cancel()
+                try:
+                    if not task_exec.done():
+                        task_exec.cancel()
+                except Exception as e:
+                    logger.error(f"Error saat cancel task execution: {e}")
             
+            # Tunggu completion dengan timeout
             if active_tasks:
                 try:
                     done, pending = await asyncio.wait(
@@ -1034,38 +1733,87 @@ class TaskScheduler:
                     still_pending = len(pending)
                     
                     if still_pending > 0:
-                        logger.warning(f"{still_pending} task executions did not complete within timeout")
+                        logger.warning(f"{still_pending} task executions tidak selesai dalam timeout")
+                        # Force cancel pending tasks
                         for p in pending:
-                            p.cancel()
+                            try:
+                                p.cancel()
+                            except Exception:
+                                pass
                     else:
-                        logger.info(f"✅ All {completed} task executions completed")
-                except (TaskSchedulerError, Exception) as e:
-                    logger.error(f"Error waiting for task executions: {e}")
+                        logger.info(f"✅ Semua {completed} task executions selesai")
+                except Exception as e:
+                    logger.error(f"Error saat menunggu task executions: {e}")
         else:
-            logger.info("No active task executions to cancel")
+            logger.info("Tidak ada active task executions untuk dibatalkan")
+    
+    async def _final_cleanup(self) -> None:
+        """Final cleanup dengan lock dan fallback."""
+        lock_acquired = await _acquire_lock_with_timeout(self._lock, LOCK_ACQUIRE_TIMEOUT)
         
-        async with self._lock:
-            remaining = len(self._all_created_tasks)
-            if remaining > 0:
-                logger.info(f"Cleaning up {remaining} remaining tracked tasks...")
+        try:
+            if lock_acquired:
+                remaining = len(self._all_created_tasks)
+                if remaining > 0:
+                    logger.info(f"Membersihkan {remaining} remaining tracked tasks...")
+                    for task in list(self._all_created_tasks):
+                        try:
+                            if not task.done():
+                                task.cancel()
+                        except Exception:
+                            pass
+                    self._all_created_tasks.clear()
+                
+                self._active_task_executions.clear()
+            else:
+                # Fallback tanpa lock
+                logger.warning("Final cleanup tanpa lock (fallback)")
                 for task in list(self._all_created_tasks):
-                    if not task.done():
-                        task.cancel()
+                    try:
+                        if not task.done():
+                            task.cancel()
+                    except Exception:
+                        pass
                 self._all_created_tasks.clear()
-            
-            self._active_task_executions.clear()
+                self._active_task_executions.clear()
+        finally:
+            if lock_acquired:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
         
         self._completion_event.set()
-        
+    
+    async def _emergency_stop_cleanup(self) -> None:
+        """Emergency cleanup yang dijamin tidak akan stuck."""
+        try:
+            # Clear semua tanpa lock
+            for task in list(self._all_created_tasks):
+                try:
+                    if not task.done():
+                        task.cancel()
+                except Exception:
+                    pass
+            
+            self._all_created_tasks.clear()
+            self._active_task_executions.clear()
+            self._completion_event.set()
+            logger.info("Emergency stop cleanup selesai")
+        except Exception as e:
+            logger.error(f"Error di emergency stop cleanup: {e}")
+    
+    def _log_stop_summary(self) -> None:
+        """Log summary setelah stop."""
         exceptions_count = len(self._task_exceptions)
         if exceptions_count > 0:
-            logger.warning(f"{exceptions_count} tasks had exceptions during this session")
+            logger.warning(f"{exceptions_count} tasks memiliki exceptions selama sesi ini")
             for task_name, exc in self._task_exceptions.items():
                 logger.debug(f"  - {task_name}: {exc}")
         
         logger.info("=" * 50)
-        logger.info("TASK SCHEDULER STOPPED SUCCESSFULLY")
-        logger.info(f"Final state - Running: {self.running}, Shutdown flag: {self._shutdown_flag.is_set()}")
+        logger.info("TASK SCHEDULER BERHASIL DIHENTIKAN")
+        logger.info(f"Status akhir - Running: {self.running}, Shutdown flag: {self._shutdown_flag.is_set()}")
         logger.info("=" * 50)
     
     def get_status(self) -> Dict:

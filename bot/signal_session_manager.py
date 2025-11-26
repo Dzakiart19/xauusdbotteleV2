@@ -346,28 +346,48 @@ class SignalSessionManager:
         return session_count
     
     def get_active_session(self, user_id: int) -> Optional[SignalSession]:
-        """Ambil sesi aktif untuk user"""
+        """Ambil sesi aktif untuk user (thread-safe snapshot)"""
         return self.active_sessions.get(user_id)
+    
+    async def get_active_session_async(self, user_id: int) -> Optional[SignalSession]:
+        """Ambil sesi aktif untuk user dengan thread-safe locking"""
+        async with self._session_lock:
+            return self.active_sessions.get(user_id)
     
     def get_session(self, user_id: int) -> Optional[SignalSession]:
         """Alias untuk get_active_session untuk kompatibilitas"""
         return self.get_active_session(user_id)
     
     def has_active_session(self, user_id: int) -> bool:
-        """Cek apakah user punya sesi aktif"""
+        """Cek apakah user punya sesi aktif (thread-safe snapshot)"""
         return user_id in self.active_sessions
+    
+    async def has_active_session_async(self, user_id: int) -> bool:
+        """Cek apakah user punya sesi aktif dengan thread-safe locking"""
+        async with self._session_lock:
+            return user_id in self.active_sessions
     
     def get_last_signal_info(self, user_id: int) -> Optional[dict]:
         """Ambil info sinyal terakhir untuk user (public method)"""
         return self._last_signal_info.get(user_id)
     
     def get_all_active_sessions(self) -> Dict[int, SignalSession]:
-        """Ambil semua sesi yang aktif"""
+        """Ambil semua sesi yang aktif (thread-safe snapshot)"""
         return self.active_sessions.copy()
     
+    async def get_all_active_sessions_async(self) -> Dict[int, SignalSession]:
+        """Ambil semua sesi yang aktif dengan thread-safe locking"""
+        async with self._session_lock:
+            return self.active_sessions.copy()
+    
     def get_session_count(self) -> int:
-        """Hitung jumlah sesi aktif"""
+        """Hitung jumlah sesi aktif (thread-safe snapshot)"""
         return len(self.active_sessions)
+    
+    async def get_session_count_async(self) -> int:
+        """Hitung jumlah sesi aktif dengan thread-safe locking"""
+        async with self._session_lock:
+            return len(self.active_sessions)
     
     def get_stats(self) -> dict:
         """Dapatkan statistik sesi"""

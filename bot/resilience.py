@@ -12,6 +12,11 @@ import logging
 logger = logging.getLogger('Resilience')
 
 
+class ResilienceError(Exception):
+    """Base exception for resilience-related errors"""
+    pass
+
+
 class CircuitBreakerOpenException(Exception):
     """Exception raised when circuit breaker is open"""
     def __init__(self, name: str, retry_in: float):
@@ -204,6 +209,7 @@ class RateLimiter:
         self.time_window = time_window
         self.name = name
         self.call_times: deque = deque(maxlen=max_calls)
+        self.last_call_time: float = 0.0
         
         logger.info(
             f"RateLimiter '{name}' initialized: "
@@ -223,6 +229,7 @@ class RateLimiter:
         
         if len(self.call_times) < self.max_calls:
             self.call_times.append(now)
+            self.last_call_time = now
             return True
         else:
             oldest_call = self.call_times[0]
@@ -250,6 +257,7 @@ class RateLimiter:
             
             if len(self.call_times) < self.max_calls:
                 self.call_times.append(now)
+                self.last_call_time = now
                 return True
             else:
                 if not wait:

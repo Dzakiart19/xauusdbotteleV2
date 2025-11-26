@@ -600,6 +600,8 @@ class TradingBotOrchestrator:
             logger.warning("Telegram Bot Token: NOT CONFIGURED ⚠️")
         
         logger.info(f"Authorized Users: {len(self.config.AUTHORIZED_USER_IDS)}")
+        logger.info(f"LOT_SIZE: {self.config.LOT_SIZE} | XAUUSD_PIP_VALUE: {self.config.XAUUSD_PIP_VALUE}")
+        logger.info(f"DYNAMIC_SL_THRESHOLD: ${self.config.DYNAMIC_SL_LOSS_THRESHOLD} | FIXED_RISK: ${self.config.FIXED_RISK_AMOUNT}")
         
         if self.config.TELEGRAM_WEBHOOK_MODE:
             webhook_url = self._auto_detect_webhook_url()

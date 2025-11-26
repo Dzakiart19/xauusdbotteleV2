@@ -27,6 +27,9 @@ POOL_PRE_PING = True
 POOL_EXHAUSTED_MAX_RETRIES = 3
 POOL_EXHAUSTED_INITIAL_DELAY = 0.5
 POOL_HIGH_UTILIZATION_THRESHOLD = 80
+TRANSACTION_MAX_RETRIES = 3
+TRANSACTION_INITIAL_DELAY = 0.1
+DEADLOCK_RETRY_DELAY = 0.2
 
 class DatabaseError(Exception):
     """Base exception for database errors"""
@@ -44,14 +47,35 @@ class PoolTimeoutError(DatabaseError):
     """Pool timeout error - could not acquire connection in time"""
     pass
 
-def retry_on_db_error(max_retries: int = 3, initial_delay: float = 0.1):
-    """Decorator to retry database operations with exponential backoff.
-    
-    Handles pool timeout errors and operational errors with retry logic.
+class DeadlockError(DatabaseError):
+    """Deadlock detected during transaction"""
+    pass
+
+class OrphanedRecordError(DatabaseError):
+    """Orphaned record detected - trade/position mismatch"""
+    pass
+
+def _is_deadlock_error(error: Exception) -> bool:
+    """Deteksi apakah error adalah deadlock.
     
     Args:
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay in seconds before first retry
+        error: Exception yang akan dicek
+        
+    Returns:
+        True jika error adalah deadlock, False jika bukan
+    """
+    error_str = str(error).lower()
+    deadlock_indicators = ['deadlock', 'lock wait timeout', 'database is locked', 'sqlite3.operationalerror: database is locked']
+    return any(indicator in error_str for indicator in deadlock_indicators)
+
+def retry_on_db_error(max_retries: int = 3, initial_delay: float = 0.1):
+    """Decorator untuk retry operasi database dengan exponential backoff.
+    
+    Menangani pool timeout errors, operational errors, dan deadlock dengan retry logic.
+    
+    Args:
+        max_retries: Jumlah maksimum percobaan retry
+        initial_delay: Delay awal dalam detik sebelum retry pertama
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -63,37 +87,63 @@ def retry_on_db_error(max_retries: int = 3, initial_delay: float = 0.1):
                 try:
                     return func(*args, **kwargs)
                 except SATimeoutError as e:
+                    last_exception = e
                     if attempt < max_retries - 1:
                         logger.warning(
-                            f"Pool timeout in {func.__name__} (attempt {attempt + 1}/{max_retries}): {e}"
+                            f"⚠️ Pool timeout pada {func.__name__} (percobaan {attempt + 1}/{max_retries}): {e}"
                         )
-                        logger.info(f"Retrying in {delay:.2f}s...")
+                        logger.info(f"🔄 Mencoba ulang dalam {delay:.2f} detik...")
                         time.sleep(delay)
                         delay *= 2
-                        last_exception = e
                     else:
-                        logger.error(f"Pool timeout - max retries reached for {func.__name__}: {e}")
+                        logger.error(
+                            f"❌ Pool timeout - batas retry tercapai untuk {func.__name__}: {e}"
+                        )
                         raise ConnectionPoolExhausted(
-                            f"Pool exhausted after {max_retries} retries in {func.__name__}"
+                            f"Pool habis setelah {max_retries} percobaan di {func.__name__}"
                         ) from e
                 except OperationalError as e:
-                    if attempt < max_retries - 1:
-                        logger.warning(f"Database operational error in {func.__name__} (attempt {attempt + 1}/{max_retries}): {e}")
-                        logger.info(f"Retrying in {delay:.2f}s...")
+                    last_exception = e
+                    is_deadlock = _is_deadlock_error(e)
+                    
+                    if is_deadlock:
+                        if attempt < max_retries - 1:
+                            deadlock_delay = max(delay, DEADLOCK_RETRY_DELAY)
+                            logger.warning(
+                                f"🔒 Deadlock terdeteksi pada {func.__name__} "
+                                f"(percobaan {attempt + 1}/{max_retries}): {e}"
+                            )
+                            logger.info(f"🔄 Mencoba ulang setelah deadlock dalam {deadlock_delay:.2f} detik...")
+                            time.sleep(deadlock_delay)
+                            delay *= 2
+                        else:
+                            logger.error(
+                                f"❌ Deadlock persisten pada {func.__name__} setelah {max_retries} percobaan: {e}"
+                            )
+                            raise DeadlockError(
+                                f"Deadlock tidak dapat diselesaikan setelah {max_retries} percobaan"
+                            ) from e
+                    elif attempt < max_retries - 1:
+                        logger.warning(
+                            f"⚠️ Error operasional database pada {func.__name__} "
+                            f"(percobaan {attempt + 1}/{max_retries}): {e}"
+                        )
+                        logger.info(f"🔄 Mencoba ulang dalam {delay:.2f} detik...")
                         time.sleep(delay)
                         delay *= 2
-                        last_exception = e
                     else:
-                        logger.error(f"Max retries reached for {func.__name__}: {e}")
+                        logger.error(
+                            f"❌ Batas retry tercapai untuk {func.__name__}: {e}"
+                        )
                         raise
                 except IntegrityError as e:
-                    logger.error(f"Integrity error in {func.__name__} (non-retryable): {e}")
+                    logger.error(f"❌ Error integritas pada {func.__name__} (tidak dapat di-retry): {e}")
                     raise
                 except SQLAlchemyDatabaseError as e:
-                    logger.error(f"Database error in {func.__name__} (non-retryable): {e}")
+                    logger.error(f"❌ Error database pada {func.__name__} (tidak dapat di-retry): {e}")
                     raise
                 except (ValueError, TypeError, IOError, RuntimeError) as e:
-                    logger.error(f"Unexpected error in {func.__name__}: {type(e).__name__}: {e}")
+                    logger.error(f"❌ Error tidak terduga pada {func.__name__}: {type(e).__name__}: {e}")
                     raise
             
             if last_exception:
@@ -705,21 +755,21 @@ class DatabaseManager:
         max_retries: int = POOL_EXHAUSTED_MAX_RETRIES,
         initial_delay: float = POOL_EXHAUSTED_INITIAL_DELAY
     ):
-        """Get session with retry logic for pool exhaustion.
+        """Mendapatkan session dengan retry logic untuk pool exhaustion.
         
-        Implements exponential backoff when pool is exhausted.
+        Mengimplementasikan exponential backoff ketika pool habis.
         
         Args:
-            max_retries: Maximum number of retry attempts
-            initial_delay: Initial delay in seconds before first retry
+            max_retries: Jumlah maksimum percobaan retry
+            initial_delay: Delay awal dalam detik sebelum retry pertama
             
         Returns:
-            Session object for database operations
+            Session object untuk operasi database
             
         Raises:
-            ConnectionPoolExhausted: If pool is exhausted after all retries
-            PoolTimeoutError: If timeout occurs and retries are exhausted
-            DatabaseError: For other session creation failures
+            ConnectionPoolExhausted: Jika pool habis setelah semua retry
+            PoolTimeoutError: Jika timeout terjadi dan retry habis
+            DatabaseError: Untuk kegagalan pembuatan session lainnya
         """
         delay = initial_delay
         last_exception = None
@@ -731,7 +781,7 @@ class DatabaseManager:
                 
                 self._last_checkout_start.start_time = time.time()
                 if self.Session is None:
-                    raise DatabaseError("Session factory not initialized")
+                    raise DatabaseError("Session factory belum diinisialisasi")
                 session = self.Session()
                 return session
                 
@@ -740,61 +790,107 @@ class DatabaseManager:
                 with self._pool_stats_lock:
                     self._pool_stats['timeout_errors'] += 1
                 
-                self.log_pool_status(level='warning')
+                self._log_pool_status_on_exhaustion()
                 
                 if attempt < max_retries:
                     logger.warning(
-                        f"⚠️ Pool timeout on attempt {attempt + 1}/{max_retries + 1}: {e}. "
-                        f"Retrying in {delay:.2f}s..."
+                        f"⚠️ Pool timeout pada percobaan {attempt + 1}/{max_retries + 1}: {e}. "
+                        f"Mencoba ulang dalam {delay:.2f} detik..."
                     )
                     time.sleep(delay)
                     delay *= 2
                 else:
                     logger.error(
-                        f"❌ Pool exhausted after {max_retries + 1} attempts. "
-                        f"Last error: {e}"
+                        f"❌ Pool habis setelah {max_retries + 1} percobaan. "
+                        f"Error terakhir: {e}"
                     )
-                    self.log_pool_status(level='error')
+                    self._log_pool_status_on_exhaustion()
                     raise ConnectionPoolExhausted(
-                        f"Connection pool exhausted after {max_retries + 1} attempts. "
-                        f"Pool timeout: {POOL_TIMEOUT}s. Consider increasing pool_size or max_overflow."
+                        f"Connection pool habis setelah {max_retries + 1} percobaan. "
+                        f"Pool timeout: {POOL_TIMEOUT}s. Pertimbangkan untuk menambah pool_size atau max_overflow."
                     ) from e
                     
             except OperationalError as e:
                 last_exception = e
                 error_str = str(e).lower()
-                if 'timeout' in error_str or 'pool' in error_str:
+                is_pool_error = 'timeout' in error_str or 'pool' in error_str
+                is_deadlock = _is_deadlock_error(e)
+                
+                if is_deadlock:
+                    with self._pool_stats_lock:
+                        self._pool_stats['timeout_errors'] += 1
+                    
+                    if attempt < max_retries:
+                        deadlock_delay = max(delay, DEADLOCK_RETRY_DELAY)
+                        logger.warning(
+                            f"🔒 Deadlock terdeteksi saat membuat session "
+                            f"(percobaan {attempt + 1}/{max_retries + 1}): {e}. "
+                            f"Mencoba ulang dalam {deadlock_delay:.2f} detik..."
+                        )
+                        self.log_pool_status(level='warning')
+                        time.sleep(deadlock_delay)
+                        delay *= 2
+                    else:
+                        logger.error(
+                            f"❌ Deadlock persisten saat membuat session setelah "
+                            f"{max_retries + 1} percobaan: {e}"
+                        )
+                        self._log_pool_status_on_exhaustion()
+                        raise DeadlockError(
+                            f"Deadlock tidak dapat diselesaikan setelah {max_retries + 1} percobaan"
+                        ) from e
+                elif is_pool_error:
                     with self._pool_stats_lock:
                         self._pool_stats['timeout_errors'] += 1
                     
                     if attempt < max_retries:
                         logger.warning(
-                            f"⚠️ Pool operational error on attempt {attempt + 1}/{max_retries + 1}: {e}. "
-                            f"Retrying in {delay:.2f}s..."
+                            f"⚠️ Error operasional pool pada percobaan {attempt + 1}/{max_retries + 1}: {e}. "
+                            f"Mencoba ulang dalam {delay:.2f} detik..."
                         )
                         self.log_pool_status(level='warning')
                         time.sleep(delay)
                         delay *= 2
                     else:
-                        logger.error(f"❌ Pool exhausted (operational error) after {max_retries + 1} attempts: {e}")
-                        self.log_pool_status(level='error')
+                        logger.error(
+                            f"❌ Pool habis (error operasional) setelah {max_retries + 1} percobaan: {e}"
+                        )
+                        self._log_pool_status_on_exhaustion()
                         raise ConnectionPoolExhausted(
-                            f"Connection pool exhausted (operational error) after {max_retries + 1} attempts"
+                            f"Connection pool habis (error operasional) setelah {max_retries + 1} percobaan"
                         ) from e
                 else:
-                    logger.error(f"Operational error creating session: {e}")
+                    logger.error(f"❌ Error operasional saat membuat session: {e}")
                     self.log_pool_status(level='error')
                     raise
                     
             except (IOError, RuntimeError, TypeError, ValueError) as e:
-                logger.error(f"Unexpected error creating database session: {type(e).__name__}: {e}")
+                logger.error(f"❌ Error tidak terduga saat membuat session database: {type(e).__name__}: {e}")
                 self.log_pool_status(level='error')
-                raise DatabaseError(f"Failed to create session: {e}") from e
+                raise DatabaseError(f"Gagal membuat session: {e}") from e
         
         if last_exception:
             raise ConnectionPoolExhausted(
-                f"Connection pool exhausted after {max_retries + 1} attempts"
+                f"Connection pool habis setelah {max_retries + 1} percobaan"
             ) from last_exception
+    
+    def _log_pool_status_on_exhaustion(self):
+        """Log status pool secara detail saat terjadi exhaustion."""
+        try:
+            status = self.get_pool_status()
+            logger.error(
+                f"📊 Status Pool saat Exhaustion:\n"
+                f"   - Pool size: {status['pool_size']}\n"
+                f"   - Checked in: {status['checked_in']}\n"
+                f"   - Checked out: {status['checked_out']}\n"
+                f"   - Overflow: {status['overflow']}\n"
+                f"   - Utilisasi: {status.get('pool_utilization_percent', 'N/A')}%\n"
+                f"   - Total timeout errors: {status['timeout_errors']}\n"
+                f"   - Waktu tunggu rata-rata: {status['avg_wait_time_ms']}ms\n"
+                f"   - Waktu tunggu maksimum: {status['max_wait_time_ms']}ms"
+            )
+        except (DatabaseError, AttributeError, KeyError) as e:
+            logger.error(f"⚠️ Tidak dapat mengambil status pool: {e}")
     
     def get_session(self):
         """Get database session with pool timeout handling and retry logic.
@@ -810,99 +906,99 @@ class DatabaseManager:
     
     @contextmanager
     def safe_session(self) -> Generator:
-        """Context manager for safe session handling with guaranteed rollback and closure.
+        """Context manager untuk penanganan session yang aman dengan rollback dan penutupan terjamin.
         
-        Provides per-operation rollback guarantees via try/except and safe session
-        closure in finally blocks. Includes pool timeout handling with graceful degradation.
+        Menyediakan jaminan rollback per-operasi via try/except dan penutupan session
+        yang aman di blok finally. Termasuk penanganan pool timeout dengan degradasi graceful.
         
         Usage:
             with db.safe_session() as session:
-                # do database operations
+                # operasi database
                 session.add(...)
-                # auto-commit on success, auto-rollback on failure
+                # auto-commit saat sukses, auto-rollback saat gagal
                 
         Raises:
-            ConnectionPoolExhausted: If pool is exhausted after all retries
-            DatabaseError: For other session creation failures
+            ConnectionPoolExhausted: Jika pool habis setelah semua retry
+            DatabaseError: Untuk kegagalan pembuatan session lainnya
         """
         session = None
         try:
             session = self.get_session()
             if session is None:
-                raise DatabaseError("Failed to acquire database session")
+                raise DatabaseError("Gagal mendapatkan session database")
             yield session
             session.commit()
         except ConnectionPoolExhausted:
-            logger.error("Safe session failed: connection pool exhausted")
+            logger.error("❌ Safe session gagal: connection pool habis")
             raise
         except SATimeoutError as e:
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after pool timeout: {rollback_error}")
-            logger.error(f"Pool timeout in safe_session: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah pool timeout: {rollback_error}")
+            logger.error(f"❌ Pool timeout pada safe_session: {e}")
             self.log_pool_status(level='error')
-            raise PoolTimeoutError(f"Pool timeout during session operation: {e}") from e
+            raise PoolTimeoutError(f"Pool timeout saat operasi session: {e}") from e
         except IntegrityError as e:
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
-            logger.error(f"Integrity error in safe_session: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah IntegrityError: {rollback_error}")
+            logger.error(f"❌ Error integritas pada safe_session: {e}")
             raise
         except OperationalError as e:
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after OperationalError: {rollback_error}")
-            logger.error(f"Operational error in safe_session: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah OperationalError: {rollback_error}")
+            logger.error(f"❌ Error operasional pada safe_session: {e}")
             raise
         except SQLAlchemyError as e:
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
-            logger.error(f"SQLAlchemy error in safe_session: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah SQLAlchemyError: {rollback_error}")
+            logger.error(f"❌ Error SQLAlchemy pada safe_session: {e}")
             raise
         except (ValueError, TypeError, IOError, RuntimeError) as e:
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback: {rollback_error}")
-            logger.error(f"Unexpected error in safe_session: {type(e).__name__}: {e}")
+                    logger.error(f"⚠️ Error saat rollback: {rollback_error}")
+            logger.error(f"❌ Error tidak terduga pada safe_session: {type(e).__name__}: {e}")
             raise
         finally:
             if session:
                 try:
                     session.close()
                 except (OperationalError, SQLAlchemyError) as close_error:
-                    logger.error(f"Error closing session: {close_error}")
+                    logger.error(f"⚠️ Error saat menutup session: {close_error}")
     
     @contextmanager
     def transaction_scope(self, isolation_level: Optional[str] = None) -> Generator:
         """
-        Provide a transactional scope with proper isolation and pool timeout handling.
+        Menyediakan scope transaksional dengan isolasi dan penanganan pool timeout yang proper.
         
-        Includes graceful degradation with retry logic for pool exhaustion scenarios.
-        Connection is always returned to pool in finally block.
+        Termasuk degradasi graceful dengan retry logic untuk skenario pool exhaustion.
+        Koneksi selalu dikembalikan ke pool di blok finally.
         
         Args:
-            isolation_level: Optional isolation level ('SERIALIZABLE', 'REPEATABLE READ', 'READ COMMITTED')
+            isolation_level: Level isolasi opsional ('SERIALIZABLE', 'REPEATABLE READ', 'READ COMMITTED')
         
         Usage:
             with db.transaction_scope() as session:
-                # do database operations
+                # operasi database
                 session.add(...)
-                # auto-commit on success, auto-rollback on failure
+                # auto-commit saat sukses, auto-rollback saat gagal
                 
         Raises:
-            ConnectionPoolExhausted: If pool is exhausted after all retries
-            PoolTimeoutError: If timeout occurs during session operations
+            ConnectionPoolExhausted: Jika pool habis setelah semua retry
+            PoolTimeoutError: Jika timeout terjadi saat operasi session
         """
         session = None
         transaction_exception = None
@@ -910,7 +1006,7 @@ class DatabaseManager:
         try:
             session = self.get_session()
             if session is None:
-                raise DatabaseError("Failed to acquire database session")
+                raise DatabaseError("Gagal mendapatkan session database")
             
             if isolation_level and self.is_postgres:
                 session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
@@ -920,7 +1016,7 @@ class DatabaseManager:
             
         except ConnectionPoolExhausted as e:
             transaction_exception = e
-            logger.error(f"Transaction failed: connection pool exhausted")
+            logger.error(f"❌ Transaksi gagal: connection pool habis")
             raise
         except SATimeoutError as e:
             transaction_exception = e
@@ -928,18 +1024,18 @@ class DatabaseManager:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after pool timeout: {rollback_error}")
-            logger.error(f"Transaction rolled back due to pool timeout: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah pool timeout: {rollback_error}")
+            logger.error(f"❌ Transaksi di-rollback karena pool timeout: {e}")
             self.log_pool_status(level='error')
-            raise PoolTimeoutError(f"Pool timeout during transaction: {e}") from e
+            raise PoolTimeoutError(f"Pool timeout saat transaksi: {e}") from e
         except IntegrityError as e:
             transaction_exception = e
             if session:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
-            logger.error(f"Transaction rolled back due to integrity error: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah IntegrityError: {rollback_error}")
+            logger.error(f"❌ Transaksi di-rollback karena error integritas: {e}")
             raise
         except OperationalError as e:
             transaction_exception = e
@@ -947,8 +1043,8 @@ class DatabaseManager:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after OperationalError: {rollback_error}")
-            logger.error(f"Transaction rolled back due to operational error: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah OperationalError: {rollback_error}")
+            logger.error(f"❌ Transaksi di-rollback karena error operasional: {e}")
             raise
         except SQLAlchemyError as e:
             transaction_exception = e
@@ -956,8 +1052,8 @@ class DatabaseManager:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
-            logger.error(f"Transaction rolled back due to SQLAlchemy error: {e}")
+                    logger.error(f"⚠️ Error saat rollback setelah SQLAlchemyError: {rollback_error}")
+            logger.error(f"❌ Transaksi di-rollback karena error SQLAlchemy: {e}")
             raise
         except (ValueError, TypeError, IOError, RuntimeError) as e:
             transaction_exception = e
@@ -965,38 +1061,209 @@ class DatabaseManager:
                 try:
                     session.rollback()
                 except (OperationalError, SQLAlchemyError) as rollback_error:
-                    logger.error(f"Error during rollback: {rollback_error}")
-            logger.error(f"Transaction rolled back: {type(e).__name__}: {e}")
+                    logger.error(f"⚠️ Error saat rollback: {rollback_error}")
+            logger.error(f"❌ Transaksi di-rollback: {type(e).__name__}: {e}")
             raise
         finally:
             if session:
                 try:
                     session.close()
                 except (OperationalError, SQLAlchemyError) as close_error:
-                    logger.error(f"Error closing session: {close_error}")
+                    logger.error(f"⚠️ Error saat menutup session: {close_error}")
                     if transaction_exception is None:
                         raise
     
     @contextmanager
     def serializable_transaction(self) -> Generator:
         """
-        Provide a serializable transaction scope for concurrent user operations.
-        Prevents race conditions when multiple users trading simultaneously.
+        Menyediakan scope transaksi serializable untuk operasi pengguna konkuren.
+        Mencegah race condition ketika banyak pengguna trading secara bersamaan.
         """
         with _transaction_lock:
             with self.transaction_scope('SERIALIZABLE' if self.is_postgres else None) as session:
                 yield session
     
-    def atomic_create_trade(self, session, trade_data: dict) -> Optional[int]:
+    @contextmanager
+    def transaction_with_retry(
+        self,
+        max_retries: int = TRANSACTION_MAX_RETRIES,
+        initial_delay: float = TRANSACTION_INITIAL_DELAY,
+        use_savepoint: bool = False,
+        isolation_level: Optional[str] = None
+    ) -> Generator:
         """
-        Create trade atomically with proper locking.
+        Context manager untuk transaksi dengan retry logic dan savepoint support.
+        
+        Menyediakan:
+        - Retry otomatis untuk deadlock dan error sementara
+        - Savepoint support untuk nested transaction
+        - Rollback yang proper pada setiap kegagalan
+        - Log detail dalam bahasa Indonesia
         
         Args:
-            session: Database session
-            trade_data: Trade data dictionary
+            max_retries: Jumlah maksimum percobaan retry
+            initial_delay: Delay awal dalam detik sebelum retry pertama
+            use_savepoint: Gunakan savepoint untuk nested transaction
+            isolation_level: Level isolasi opsional ('SERIALIZABLE', 'REPEATABLE READ', 'READ COMMITTED')
+        
+        Usage:
+            with db.transaction_with_retry() as session:
+                # operasi database
+                session.add(...)
+                # auto-commit saat sukses, auto-rollback saat gagal
+                
+        Raises:
+            DeadlockError: Jika deadlock tidak dapat diselesaikan setelah semua retry
+            ConnectionPoolExhausted: Jika pool habis setelah semua retry
+            DatabaseError: Untuk error lainnya
+        """
+        delay = initial_delay
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):
+            session = None
+            savepoint = None
+            
+            try:
+                session = self.get_session()
+                if session is None:
+                    raise DatabaseError("Gagal mendapatkan session database")
+                
+                if isolation_level and self.is_postgres:
+                    session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
+                
+                if use_savepoint and self.is_postgres:
+                    savepoint_name = f"sp_{int(time.time() * 1000)}_{attempt}"
+                    session.execute(text(f"SAVEPOINT {savepoint_name}"))
+                    savepoint = savepoint_name
+                    logger.debug(f"🔖 Savepoint dibuat: {savepoint_name}")
+                
+                yield session
+                
+                if savepoint:
+                    session.execute(text(f"RELEASE SAVEPOINT {savepoint}"))
+                    logger.debug(f"🔖 Savepoint dirilis: {savepoint}")
+                
+                session.commit()
+                logger.debug(f"✅ Transaksi berhasil pada percobaan {attempt + 1}")
+                return
+                
+            except OperationalError as e:
+                last_exception = e
+                is_deadlock = _is_deadlock_error(e)
+                
+                if savepoint and session:
+                    try:
+                        session.execute(text(f"ROLLBACK TO SAVEPOINT {savepoint}"))
+                        logger.info(f"🔖 Rollback ke savepoint: {savepoint}")
+                    except (OperationalError, SQLAlchemyError) as sp_error:
+                        logger.warning(f"⚠️ Gagal rollback ke savepoint: {sp_error}")
+                elif session:
+                    try:
+                        session.rollback()
+                    except (OperationalError, SQLAlchemyError) as rb_error:
+                        logger.warning(f"⚠️ Error saat rollback: {rb_error}")
+                
+                if is_deadlock:
+                    if attempt < max_retries:
+                        deadlock_delay = max(delay, DEADLOCK_RETRY_DELAY)
+                        logger.warning(
+                            f"🔒 Deadlock terdeteksi (percobaan {attempt + 1}/{max_retries + 1}): {e}. "
+                            f"Mencoba ulang dalam {deadlock_delay:.2f} detik..."
+                        )
+                        time.sleep(deadlock_delay)
+                        delay *= 2
+                        continue
+                    else:
+                        logger.error(
+                            f"❌ Deadlock persisten setelah {max_retries + 1} percobaan: {e}"
+                        )
+                        raise DeadlockError(
+                            f"Deadlock tidak dapat diselesaikan setelah {max_retries + 1} percobaan"
+                        ) from e
+                elif attempt < max_retries:
+                    logger.warning(
+                        f"⚠️ Error operasional (percobaan {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Mencoba ulang dalam {delay:.2f} detik..."
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                else:
+                    logger.error(f"❌ Error operasional setelah {max_retries + 1} percobaan: {e}")
+                    raise
+                    
+            except SATimeoutError as e:
+                last_exception = e
+                if session:
+                    try:
+                        session.rollback()
+                    except (OperationalError, SQLAlchemyError) as rb_error:
+                        logger.warning(f"⚠️ Error saat rollback setelah timeout: {rb_error}")
+                
+                if attempt < max_retries:
+                    logger.warning(
+                        f"⚠️ Pool timeout (percobaan {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Mencoba ulang dalam {delay:.2f} detik..."
+                    )
+                    self.log_pool_status(level='warning')
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                else:
+                    logger.error(f"❌ Pool timeout setelah {max_retries + 1} percobaan: {e}")
+                    self._log_pool_status_on_exhaustion()
+                    raise PoolTimeoutError(
+                        f"Pool timeout tidak dapat diselesaikan setelah {max_retries + 1} percobaan"
+                    ) from e
+                    
+            except IntegrityError as e:
+                if session:
+                    try:
+                        session.rollback()
+                    except (OperationalError, SQLAlchemyError) as rb_error:
+                        logger.warning(f"⚠️ Error saat rollback setelah IntegrityError: {rb_error}")
+                logger.error(f"❌ Error integritas (tidak dapat di-retry): {e}")
+                raise
+                
+            except SQLAlchemyError as e:
+                if session:
+                    try:
+                        session.rollback()
+                    except (OperationalError, SQLAlchemyError) as rb_error:
+                        logger.warning(f"⚠️ Error saat rollback setelah SQLAlchemyError: {rb_error}")
+                logger.error(f"❌ Error SQLAlchemy: {e}")
+                raise
+                
+            except (ValueError, TypeError, IOError, RuntimeError) as e:
+                if session:
+                    try:
+                        session.rollback()
+                    except (OperationalError, SQLAlchemyError) as rb_error:
+                        logger.warning(f"⚠️ Error saat rollback: {rb_error}")
+                logger.error(f"❌ Error tidak terduga: {type(e).__name__}: {e}")
+                raise
+                
+            finally:
+                if session:
+                    try:
+                        session.close()
+                    except (OperationalError, SQLAlchemyError) as close_error:
+                        logger.warning(f"⚠️ Error saat menutup session: {close_error}")
+        
+        if last_exception:
+            raise last_exception
+    
+    def atomic_create_trade(self, session, trade_data: dict) -> Optional[int]:
+        """
+        Membuat trade secara atomik dengan locking yang proper.
+        
+        Args:
+            session: Session database
+            trade_data: Dictionary data trade
             
         Returns:
-            Trade ID if successful, None otherwise
+            Trade ID jika berhasil, None jika gagal
         """
         try:
             from bot.database import Trade
@@ -1012,41 +1279,41 @@ class DatabaseManager:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
-            logger.error(f"Integrity error creating trade atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah IntegrityError: {rollback_error}")
+            logger.error(f"❌ Error integritas saat membuat trade secara atomik: {e}")
             raise
         except OperationalError as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after OperationalError: {rollback_error}")
-            logger.error(f"Operational error creating trade atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah OperationalError: {rollback_error}")
+            logger.error(f"❌ Error operasional saat membuat trade secara atomik: {e}")
             raise
         except SQLAlchemyError as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
-            logger.error(f"SQLAlchemy error creating trade atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah SQLAlchemyError: {rollback_error}")
+            logger.error(f"❌ Error SQLAlchemy saat membuat trade secara atomik: {e}")
             raise
         except (ValueError, TypeError, KeyError) as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback: {rollback_error}")
-            logger.error(f"Unexpected error creating trade atomically: {type(e).__name__}: {e}")
+                logger.error(f"⚠️ Error saat rollback: {rollback_error}")
+            logger.error(f"❌ Error tidak terduga saat membuat trade secara atomik: {type(e).__name__}: {e}")
             raise
     
     def atomic_create_position(self, session, position_data: dict) -> Optional[int]:
         """
-        Create position atomically with proper locking.
+        Membuat posisi secara atomik dengan locking yang proper.
         
         Args:
-            session: Database session  
-            position_data: Position data dictionary
+            session: Session database  
+            position_data: Dictionary data posisi
             
         Returns:
-            Position ID if successful, None otherwise
+            Position ID jika berhasil, None jika gagal
         """
         try:
             from bot.database import Position
@@ -1062,40 +1329,310 @@ class DatabaseManager:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
-            logger.error(f"Integrity error creating position atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah IntegrityError: {rollback_error}")
+            logger.error(f"❌ Error integritas saat membuat posisi secara atomik: {e}")
             raise
         except OperationalError as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after OperationalError: {rollback_error}")
-            logger.error(f"Operational error creating position atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah OperationalError: {rollback_error}")
+            logger.error(f"❌ Error operasional saat membuat posisi secara atomik: {e}")
             raise
         except SQLAlchemyError as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
-            logger.error(f"SQLAlchemy error creating position atomically: {e}")
+                logger.error(f"⚠️ Error saat rollback setelah SQLAlchemyError: {rollback_error}")
+            logger.error(f"❌ Error SQLAlchemy saat membuat posisi secara atomik: {e}")
             raise
         except (ValueError, TypeError, KeyError) as e:
             try:
                 session.rollback()
             except (OperationalError, SQLAlchemyError) as rollback_error:
-                logger.error(f"Error during rollback: {rollback_error}")
-            logger.error(f"Unexpected error creating position atomically: {type(e).__name__}: {e}")
+                logger.error(f"⚠️ Error saat rollback: {rollback_error}")
+            logger.error(f"❌ Error tidak terduga saat membuat posisi secara atomik: {type(e).__name__}: {e}")
             raise
     
-    def close(self):
-        """Close database connections with error handling and pool cleanup."""
+    def atomic_close_position(
+        self,
+        user_id: int,
+        position_id: int,
+        trade_id: int,
+        exit_price: float,
+        actual_pl: float,
+        close_time: datetime
+    ) -> bool:
+        """
+        Menutup posisi secara atomik dengan memastikan konsistensi trade dan position.
+        
+        Menggunakan transaction_with_retry untuk memastikan:
+        - Trade dan position diperbarui dalam satu transaksi atomik
+        - Rollback otomatis jika salah satu operasi gagal
+        - Tidak ada orphaned records (trade CLOSED tapi position masih ACTIVE atau sebaliknya)
+        
+        Args:
+            user_id: ID pengguna Telegram
+            position_id: ID posisi yang akan ditutup
+            trade_id: ID trade terkait
+            exit_price: Harga penutupan
+            actual_pl: Profit/Loss aktual
+            close_time: Waktu penutupan
+            
+        Returns:
+            True jika berhasil, False jika gagal
+            
+        Raises:
+            OrphanedRecordError: Jika ditemukan inkonsistensi data
+            DatabaseError: Untuk error database lainnya
+        """
         try:
-            logger.info("Closing database connections...")
+            with self.transaction_with_retry(
+                max_retries=TRANSACTION_MAX_RETRIES,
+                use_savepoint=self.is_postgres
+            ) as session:
+                position = session.query(Position).filter(
+                    Position.id == position_id,
+                    Position.user_id == user_id
+                ).with_for_update().first()
+                
+                trade = session.query(Trade).filter(
+                    Trade.id == trade_id,
+                    Trade.user_id == user_id
+                ).with_for_update().first()
+                
+                if not position:
+                    logger.warning(
+                        f"⚠️ Posisi tidak ditemukan: position_id={position_id}, user_id={user_id}"
+                    )
+                    return False
+                
+                if not trade:
+                    logger.error(
+                        f"❌ Trade tidak ditemukan untuk posisi: trade_id={trade_id}, "
+                        f"position_id={position_id}, user_id={user_id}"
+                    )
+                    raise OrphanedRecordError(
+                        f"Posisi orphan terdeteksi: position_id={position_id} "
+                        f"tanpa trade terkait trade_id={trade_id}"
+                    )
+                
+                position.status = 'CLOSED'
+                position.current_price = exit_price
+                position.unrealized_pl = actual_pl
+                position.closed_at = close_time
+                
+                trade.status = 'CLOSED'
+                trade.exit_price = exit_price
+                trade.actual_pl = actual_pl
+                trade.close_time = close_time
+                trade.result = 'WIN' if actual_pl > 0 else 'LOSS'
+                
+                session.flush()
+                
+                logger.info(
+                    f"✅ Posisi ditutup secara atomik: position_id={position_id}, "
+                    f"trade_id={trade_id}, P/L=${actual_pl:.2f}, hasil={trade.result}"
+                )
+                
+                return True
+                
+        except OrphanedRecordError:
+            raise
+        except DeadlockError as e:
+            logger.error(f"❌ Deadlock saat menutup posisi {position_id}: {e}")
+            raise
+        except ConnectionPoolExhausted as e:
+            logger.error(f"❌ Pool habis saat menutup posisi {position_id}: {e}")
+            raise
+        except (OperationalError, IntegrityError, SQLAlchemyError) as e:
+            logger.error(
+                f"❌ Error database saat menutup posisi {position_id}: {type(e).__name__}: {e}"
+            )
+            raise DatabaseError(f"Gagal menutup posisi secara atomik: {e}") from e
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ Error validasi saat menutup posisi {position_id}: {e}")
+            raise DatabaseError(f"Error validasi: {e}") from e
+    
+    def cleanup_orphaned_trades(self) -> Dict[str, int]:
+        """
+        Membersihkan trade dan posisi orphan dalam database.
+        
+        Orphaned trades adalah:
+        - Trade dengan status OPEN tapi tidak ada posisi ACTIVE yang terkait
+        - Posisi dengan status ACTIVE tapi trade terkait sudah CLOSED
+        
+        Returns:
+            Dict dengan jumlah record yang dibersihkan:
+            {
+                'orphaned_trades_fixed': int,
+                'orphaned_positions_fixed': int,
+                'mismatched_status_fixed': int
+            }
+        """
+        result = {
+            'orphaned_trades_fixed': 0,
+            'orphaned_positions_fixed': 0,
+            'mismatched_status_fixed': 0
+        }
+        
+        try:
+            with self.transaction_with_retry(max_retries=TRANSACTION_MAX_RETRIES) as session:
+                orphaned_positions = session.query(Position).filter(
+                    Position.status == 'ACTIVE'
+                ).all()
+                
+                for position in orphaned_positions:
+                    trade = session.query(Trade).filter(
+                        Trade.id == position.trade_id,
+                        Trade.user_id == position.user_id
+                    ).first()
+                    
+                    if not trade:
+                        logger.warning(
+                            f"🔧 Posisi orphan ditemukan (tanpa trade): position_id={position.id}, "
+                            f"trade_id={position.trade_id}, user_id={position.user_id}"
+                        )
+                        position.status = 'ORPHANED'
+                        result['orphaned_positions_fixed'] += 1
+                    elif trade.status == 'CLOSED' and position.status == 'ACTIVE':
+                        logger.warning(
+                            f"🔧 Status tidak cocok: position_id={position.id} ACTIVE "
+                            f"tapi trade_id={trade.id} CLOSED"
+                        )
+                        position.status = 'CLOSED'
+                        position.closed_at = trade.close_time
+                        position.current_price = trade.exit_price
+                        position.unrealized_pl = trade.actual_pl
+                        result['mismatched_status_fixed'] += 1
+                
+                open_trades = session.query(Trade).filter(
+                    Trade.status == 'OPEN'
+                ).all()
+                
+                for trade in open_trades:
+                    position = session.query(Position).filter(
+                        Position.trade_id == trade.id,
+                        Position.user_id == trade.user_id,
+                        Position.status == 'ACTIVE'
+                    ).first()
+                    
+                    if not position:
+                        logger.warning(
+                            f"🔧 Trade orphan ditemukan (tanpa posisi aktif): trade_id={trade.id}, "
+                            f"user_id={trade.user_id}"
+                        )
+                        trade.status = 'ORPHANED'
+                        result['orphaned_trades_fixed'] += 1
+                
+                session.flush()
+                
+                total_fixed = sum(result.values())
+                if total_fixed > 0:
+                    logger.info(
+                        f"✅ Pembersihan orphaned records selesai: "
+                        f"posisi={result['orphaned_positions_fixed']}, "
+                        f"trade={result['orphaned_trades_fixed']}, "
+                        f"status mismatch={result['mismatched_status_fixed']}"
+                    )
+                else:
+                    logger.debug("✅ Tidak ada orphaned records ditemukan")
+                
+                return result
+                
+        except (DeadlockError, ConnectionPoolExhausted) as e:
+            logger.error(f"❌ Error saat membersihkan orphaned records: {e}")
+            raise
+        except (OperationalError, IntegrityError, SQLAlchemyError) as e:
+            logger.error(f"❌ Error database saat membersihkan orphaned records: {e}")
+            raise DatabaseError(f"Gagal membersihkan orphaned records: {e}") from e
+    
+    def verify_trade_position_consistency(self, user_id: int, trade_id: int) -> Dict:
+        """
+        Memverifikasi konsistensi antara trade dan posisi terkait.
+        
+        Args:
+            user_id: ID pengguna
+            trade_id: ID trade yang akan diverifikasi
+            
+        Returns:
+            Dict dengan status konsistensi:
+            {
+                'consistent': bool,
+                'trade_status': str,
+                'position_status': str or None,
+                'issues': List[str]
+            }
+        """
+        result = {
+            'consistent': True,
+            'trade_status': None,
+            'position_status': None,
+            'issues': []
+        }
+        
+        try:
+            with self.safe_session() as session:
+                trade = session.query(Trade).filter(
+                    Trade.id == trade_id,
+                    Trade.user_id == user_id
+                ).first()
+                
+                if not trade:
+                    result['consistent'] = False
+                    result['issues'].append(f"Trade tidak ditemukan: trade_id={trade_id}")
+                    return result
+                
+                result['trade_status'] = trade.status
+                
+                position = session.query(Position).filter(
+                    Position.trade_id == trade_id,
+                    Position.user_id == user_id
+                ).first()
+                
+                if not position:
+                    result['consistent'] = False
+                    result['issues'].append(
+                        f"Posisi tidak ditemukan untuk trade_id={trade_id}"
+                    )
+                    return result
+                
+                result['position_status'] = position.status
+                
+                if trade.status == 'OPEN' and position.status != 'ACTIVE':
+                    result['consistent'] = False
+                    result['issues'].append(
+                        f"Trade OPEN tapi posisi {position.status}"
+                    )
+                elif trade.status == 'CLOSED' and position.status not in ['CLOSED', 'ORPHANED']:
+                    result['consistent'] = False
+                    result['issues'].append(
+                        f"Trade CLOSED tapi posisi {position.status}"
+                    )
+                
+                if result['issues']:
+                    logger.warning(
+                        f"⚠️ Inkonsistensi terdeteksi untuk trade_id={trade_id}: "
+                        f"{', '.join(result['issues'])}"
+                    )
+                
+                return result
+                
+        except (OperationalError, SQLAlchemyError) as e:
+            logger.error(f"❌ Error saat verifikasi konsistensi: {e}")
+            result['consistent'] = False
+            result['issues'].append(f"Error database: {e}")
+            return result
+    
+    def close(self):
+        """Menutup koneksi database dengan error handling dan pool cleanup."""
+        try:
+            logger.info("🔌 Menutup koneksi database...")
             self.log_pool_status()
             if self.Session is not None:
                 self.Session.remove()
             if self.engine is not None:
                 self.engine.dispose()
-            logger.info("✅ Database connections closed successfully")
+            logger.info("✅ Koneksi database berhasil ditutup")
         except (OperationalError, SQLAlchemyError, AttributeError) as e:
-            logger.error(f"Error closing database: {type(e).__name__}: {e}")
+            logger.error(f"❌ Error saat menutup database: {type(e).__name__}: {e}")

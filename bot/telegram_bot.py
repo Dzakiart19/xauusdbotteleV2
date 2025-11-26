@@ -251,7 +251,14 @@ class TradingBot:
             time_window=60.0,
             name="TelegramAPI"
         )
-        logger.info("✅ Rate limiter initialized for Telegram API")
+        logger.info("✅ Rate limiter global diinisialisasi untuk Telegram API")
+        
+        self._user_rate_limiters: Dict[int, RateLimiter] = {}
+        self._user_rate_limiter_lock = asyncio.Lock()
+        self.MAX_USER_RATE_LIMITERS = 1000
+        self.USER_RATE_LIMIT_MAX_CALLS = 10
+        self.USER_RATE_LIMIT_TIME_WINDOW = 60.0
+        logger.info(f"✅ Per-user rate limiter diinisialisasi: max {self.USER_RATE_LIMIT_MAX_CALLS} calls/{self.USER_RATE_LIMIT_TIME_WINDOW}s per user")
         
         self.global_last_signal_time = datetime.now() - timedelta(seconds=60)
         self.signal_detection_interval = 0  # INSTANT - 0 delay, check on every tick
@@ -308,6 +315,49 @@ class TradingBot:
             user = self.user_manager.get_user(user_id)
             return user.is_admin if user else False
         return False
+    
+    async def _get_user_rate_limiter(self, user_id: int) -> RateLimiter:
+        """Mendapatkan atau membuat rate limiter untuk user tertentu.
+        
+        Thread-safe dengan lock untuk mencegah race condition saat concurrent requests.
+        """
+        async with self._user_rate_limiter_lock:
+            if user_id not in self._user_rate_limiters:
+                if len(self._user_rate_limiters) >= self.MAX_USER_RATE_LIMITERS:
+                    oldest_user = min(
+                        self._user_rate_limiters.items(),
+                        key=lambda x: x[1].last_call_time if hasattr(x[1], 'last_call_time') else 0
+                    )[0]
+                    del self._user_rate_limiters[oldest_user]
+                    logger.debug(f"Per-user rate limiter evicted untuk user {mask_user_id(oldest_user)}")
+                
+                self._user_rate_limiters[user_id] = RateLimiter(
+                    max_calls=self.USER_RATE_LIMIT_MAX_CALLS,
+                    time_window=self.USER_RATE_LIMIT_TIME_WINDOW,
+                    name=f"User_{mask_user_id(user_id)}"
+                )
+                logger.debug(f"Per-user rate limiter dibuat untuk user {mask_user_id(user_id)}")
+            
+            return self._user_rate_limiters[user_id]
+    
+    async def _check_user_rate_limit(self, user_id: int) -> bool:
+        """Cek apakah user masih dalam batas rate limit.
+        
+        Returns:
+            True jika request diizinkan, False jika rate limited
+        """
+        try:
+            user_limiter = await self._get_user_rate_limiter(user_id)
+            can_proceed = await user_limiter.acquire_async(wait=False)
+            
+            if not can_proceed:
+                logger.warning(f"⚠️ Per-user rate limit tercapai untuk user {mask_user_id(user_id)}")
+                return False
+            
+            return True
+        except (asyncio.CancelledError, RuntimeError) as e:
+            logger.error(f"Error saat cek user rate limit: {e}")
+            return True
     
     def _generate_signal_hash(self, user_id: int, signal_type: str, entry_price: float) -> str:
         """Generate hash unik untuk signal berdasarkan user, type, price bucket, dan timestamp bucket per menit."""
@@ -1204,6 +1254,13 @@ class TradingBot:
         if user is None or message is None or chat is None:
             return
         
+        if not await self._check_user_rate_limit(user.id):
+            try:
+                await message.reply_text("⚠️ Anda mengirim terlalu banyak request. Silakan tunggu sebentar.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+            return
+        
         try:
             if self.user_manager:
                 self.user_manager.create_user(
@@ -1260,39 +1317,39 @@ class TradingBot:
             logger.info(f"Start command executed successfully for user {mask_user_id(user.id)}")
             
         except asyncio.CancelledError:
-            logger.info(f"Start command cancelled for user {mask_user_id(update.effective_user.id)}")
+            logger.info(f"Start command dibatalkan untuk user {mask_user_id(user.id)}")
             raise
         except RetryAfter as e:
-            logger.warning(f"Rate limit in start command: retry after {e.retry_after}s")
+            logger.warning(f"Rate limit pada start command: retry setelah {e.retry_after}s")
             await asyncio.sleep(e.retry_after)
+        except BadRequest as e:
+            await self._handle_bad_request(chat.id, e, context="start_command")
+        except Forbidden as e:
+            await self._handle_forbidden_error(chat.id, e)
+        except ChatMigrated as e:
+            new_chat_id = await self._handle_chat_migrated(chat.id, e)
+            if new_chat_id:
+                logger.info(f"Chat bermigrasi di start command, ID baru: {new_chat_id}")
         except (TimedOut, NetworkError) as e:
-            logger.warning(f"Network/timeout error in start command: {e}")
+            logger.warning(f"Network/timeout error pada start command: {e}")
             try:
-                await update.message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
+                await message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except BadRequest as e:
-            await self._handle_bad_request(update.effective_chat.id, e, context="start_command")
-        except Forbidden as e:
-            await self._handle_forbidden_error(update.effective_chat.id, e)
-        except ChatMigrated as e:
-            new_chat_id = await self._handle_chat_migrated(update.effective_chat.id, e)
-            if new_chat_id:
-                logger.info(f"Chat migrated in start command, new ID: {new_chat_id}")
         except Conflict as e:
             await self._handle_conflict_error(e)
         except InvalidToken as e:
             await self._handle_unauthorized_error(e)
         except TelegramError as e:
-            logger.error(f"Telegram error in start command: {e}")
+            logger.error(f"Telegram error pada start command: {e}")
             try:
-                await update.message.reply_text("❌ Terjadi error Telegram. Silakan coba lagi.")
+                await message.reply_text("❌ Terjadi error Telegram. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
         except (ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.error(f"Data error in start command: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"Data error pada start command: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await update.message.reply_text("❌ Terjadi error saat memproses command. Silakan coba lagi.")
+                await message.reply_text("❌ Terjadi error saat memproses command. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
     
@@ -1300,8 +1357,19 @@ class TradingBot:
         if update.effective_user is None or update.message is None or update.effective_chat is None:
             return
         
+        user = update.effective_user
+        message = update.message
+        chat = update.effective_chat
+        
+        if not await self._check_user_rate_limit(user.id):
+            try:
+                await message.reply_text("⚠️ Anda mengirim terlalu banyak request. Silakan tunggu sebentar.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+            return
+        
         try:
-            if not self.is_authorized(update.effective_user.id):
+            if not self.is_authorized(user.id):
                 return
             
             help_msg = (
@@ -1323,36 +1391,36 @@ class TradingBot:
                 f"- Risk per trade: ${self.config.FIXED_RISK_AMOUNT:.2f} (Fixed)\n"
             )
             
-            await update.message.reply_text(help_msg, parse_mode='Markdown')
-            logger.info(f"Help command executed for user {mask_user_id(update.effective_user.id)}")
+            await message.reply_text(help_msg, parse_mode='Markdown')
+            logger.info(f"Help command dijalankan untuk user {mask_user_id(user.id)}")
             
         except asyncio.CancelledError:
-            logger.info(f"Help command cancelled for user {mask_user_id(update.effective_user.id)}")
+            logger.info(f"Help command dibatalkan untuk user {mask_user_id(user.id)}")
             raise
         except RetryAfter as e:
-            logger.warning(f"Rate limit in help command: retry after {e.retry_after}s")
-        except (TimedOut, NetworkError) as e:
-            logger.warning(f"Network/timeout error in help command: {e}")
+            logger.warning(f"Rate limit pada help command: retry setelah {e.retry_after}s")
         except BadRequest as e:
-            await self._handle_bad_request(update.effective_chat.id, e, context="help_command")
+            await self._handle_bad_request(chat.id, e, context="help_command")
         except Forbidden as e:
-            await self._handle_forbidden_error(update.effective_chat.id, e)
+            await self._handle_forbidden_error(chat.id, e)
         except ChatMigrated as e:
-            await self._handle_chat_migrated(update.effective_chat.id, e)
+            await self._handle_chat_migrated(chat.id, e)
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"Network/timeout error pada help command: {e}")
         except Conflict as e:
             await self._handle_conflict_error(e)
         except InvalidToken as e:
             await self._handle_unauthorized_error(e)
         except TelegramError as e:
-            logger.error(f"Telegram error in help command: {e}")
+            logger.error(f"Telegram error pada help command: {e}")
             try:
-                await update.message.reply_text("❌ Error menampilkan bantuan.")
+                await message.reply_text("❌ Error menampilkan bantuan.")
             except (TelegramError, asyncio.CancelledError):
                 pass
         except (ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.error(f"Data error in help command: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"Data error pada help command: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await update.message.reply_text("❌ Error menampilkan bantuan.")
+                await message.reply_text("❌ Error menampilkan bantuan.")
             except (TelegramError, asyncio.CancelledError):
                 pass
     
@@ -1360,19 +1428,30 @@ class TradingBot:
         if update.effective_user is None or update.message is None or update.effective_chat is None:
             return
         
+        user = update.effective_user
+        message = update.message
+        chat = update.effective_chat
+        
+        if not await self._check_user_rate_limit(user.id):
+            try:
+                await message.reply_text("⚠️ Anda mengirim terlalu banyak request. Silakan tunggu sebentar.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+            return
+        
         try:
-            if not self.is_authorized(update.effective_user.id):
+            if not self.is_authorized(user.id):
                 return
             
-            chat_id = update.effective_chat.id
+            chat_id = chat.id
             
             if self.monitoring and chat_id in self.monitoring_chats:
-                await update.message.reply_text("⚠️ Monitoring sudah berjalan untuk Anda!")
+                await message.reply_text("⚠️ Monitoring sudah berjalan untuk Anda!")
                 return
             
             if len(self.monitoring_chats) >= self.MAX_MONITORING_CHATS:
-                await update.message.reply_text("⚠️ Batas maksimum monitoring tercapai. Silakan coba lagi nanti.")
-                logger.warning(f"Monitoring limit reached ({self.MAX_MONITORING_CHATS})")
+                await message.reply_text("⚠️ Batas maksimum monitoring tercapai. Silakan coba lagi nanti.")
+                logger.warning(f"Limit monitoring tercapai ({self.MAX_MONITORING_CHATS})")
                 return
             
             if not self.monitoring:
@@ -1380,44 +1459,44 @@ class TradingBot:
             
             if chat_id not in self.monitoring_chats:
                 self.monitoring_chats.append(chat_id)
-                await update.message.reply_text("✅ Monitoring dimulai! Bot akan mendeteksi sinyal secara real-time...")
+                await message.reply_text("✅ Monitoring dimulai! Bot akan mendeteksi sinyal secara real-time...")
                 task = asyncio.create_task(self._monitoring_loop(chat_id))
                 self.monitoring_tasks[chat_id] = task
-                logger.info(f"✅ Monitoring task created for chat {mask_user_id(chat_id)}")
+                logger.info(f"✅ Monitoring task dibuat untuk chat {mask_user_id(chat_id)}")
                 
         except asyncio.CancelledError:
-            logger.info(f"Monitor command cancelled for user {mask_user_id(update.effective_user.id)}")
+            logger.info(f"Monitor command dibatalkan untuk user {mask_user_id(user.id)}")
             raise
         except RetryAfter as e:
-            logger.warning(f"Rate limit in monitor command: retry after {e.retry_after}s")
+            logger.warning(f"Rate limit pada monitor command: retry setelah {e.retry_after}s")
+        except BadRequest as e:
+            await self._handle_bad_request(chat.id, e, context="monitor_command")
+        except Forbidden as e:
+            await self._handle_forbidden_error(chat.id, e)
+        except ChatMigrated as e:
+            new_chat_id = await self._handle_chat_migrated(chat.id, e)
+            if new_chat_id:
+                logger.info(f"Chat bermigrasi di monitor command, chat baru: {new_chat_id}")
         except (TimedOut, NetworkError) as e:
-            logger.warning(f"Network/timeout error in monitor command: {e}")
+            logger.warning(f"Network/timeout error pada monitor command: {e}")
             try:
-                await update.message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
+                await message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except BadRequest as e:
-            await self._handle_bad_request(update.effective_chat.id, e, context="monitor_command")
-        except Forbidden as e:
-            await self._handle_forbidden_error(update.effective_chat.id, e)
-        except ChatMigrated as e:
-            new_chat_id = await self._handle_chat_migrated(update.effective_chat.id, e)
-            if new_chat_id:
-                logger.info(f"Chat migrated in monitor command, monitoring new chat: {new_chat_id}")
         except Conflict as e:
             await self._handle_conflict_error(e)
         except InvalidToken as e:
             await self._handle_unauthorized_error(e)
         except TelegramError as e:
-            logger.error(f"Telegram error in monitor command: {e}")
+            logger.error(f"Telegram error pada monitor command: {e}")
             try:
-                await update.message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
+                await message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
         except (ValueError, TypeError, AttributeError, KeyError, RuntimeError) as e:
-            logger.error(f"Unexpected error in monitor command: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"Error tidak terduga pada monitor command: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await update.message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
+                await message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
     
@@ -1437,11 +1516,22 @@ class TradingBot:
         if update.effective_user is None or update.message is None or update.effective_chat is None:
             return
         
+        user = update.effective_user
+        message = update.message
+        chat = update.effective_chat
+        
+        if not await self._check_user_rate_limit(user.id):
+            try:
+                await message.reply_text("⚠️ Anda mengirim terlalu banyak request. Silakan tunggu sebentar.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+            return
+        
         try:
-            if not self.is_authorized(update.effective_user.id):
+            if not self.is_authorized(user.id):
                 return
             
-            chat_id = update.effective_chat.id
+            chat_id = chat.id
             
             if chat_id in self.monitoring_chats:
                 self.monitoring_chats.remove(chat_id)
@@ -1454,49 +1544,49 @@ class TradingBot:
                             await asyncio.wait_for(task, timeout=3.0)
                         except (asyncio.CancelledError, asyncio.TimeoutError):
                             pass
-                    logger.info(f"✅ Monitoring task cancelled for chat {mask_user_id(chat_id)}")
+                    logger.info(f"✅ Monitoring task dibatalkan untuk chat {mask_user_id(chat_id)}")
                 
-                await update.message.reply_text("🛑 Monitoring dihentikan untuk Anda.")
+                await message.reply_text("🛑 Monitoring dihentikan untuk Anda.")
                 
                 if len(self.monitoring_chats) == 0:
                     self.monitoring = False
-                    logger.info("All monitoring stopped")
+                    logger.info("Semua monitoring dihentikan")
             else:
-                await update.message.reply_text("⚠️ Monitoring tidak sedang berjalan untuk Anda.")
+                await message.reply_text("⚠️ Monitoring tidak sedang berjalan untuk Anda.")
                 
-            logger.info(f"Stop monitor command executed for user {mask_user_id(update.effective_user.id)}")
+            logger.info(f"Stop monitor command dijalankan untuk user {mask_user_id(user.id)}")
             
         except asyncio.CancelledError:
-            logger.info(f"Stopmonitor command cancelled for user {mask_user_id(update.effective_user.id)}")
+            logger.info(f"Stopmonitor command dibatalkan untuk user {mask_user_id(user.id)}")
             raise
         except RetryAfter as e:
-            logger.warning(f"Rate limit in stopmonitor command: retry after {e.retry_after}s")
+            logger.warning(f"Rate limit pada stopmonitor command: retry setelah {e.retry_after}s")
+        except BadRequest as e:
+            await self._handle_bad_request(chat.id, e, context="stopmonitor_command")
+        except Forbidden as e:
+            await self._handle_forbidden_error(chat.id, e)
+        except ChatMigrated as e:
+            await self._handle_chat_migrated(chat.id, e)
         except (TimedOut, NetworkError) as e:
-            logger.warning(f"Network/timeout error in stopmonitor command: {e}")
+            logger.warning(f"Network/timeout error pada stopmonitor command: {e}")
             try:
-                await update.message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
+                await message.reply_text("⏳ Koneksi timeout, silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except BadRequest as e:
-            await self._handle_bad_request(update.effective_chat.id, e, context="stopmonitor_command")
-        except Forbidden as e:
-            await self._handle_forbidden_error(update.effective_chat.id, e)
-        except ChatMigrated as e:
-            await self._handle_chat_migrated(update.effective_chat.id, e)
         except Conflict as e:
             await self._handle_conflict_error(e)
         except InvalidToken as e:
             await self._handle_unauthorized_error(e)
         except TelegramError as e:
-            logger.error(f"Telegram error in stopmonitor command: {e}")
+            logger.error(f"Telegram error pada stopmonitor command: {e}")
             try:
-                await update.message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
+                await message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
         except (ValueError, TypeError, AttributeError, KeyError, RuntimeError) as e:
-            logger.error(f"Unexpected error in stopmonitor command: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"Error tidak terduga pada stopmonitor command: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await update.message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
+                await message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
     
@@ -2128,22 +2218,32 @@ class TradingBot:
             logger.error(f"Error stopping dashboard for user {mask_user_id(user_id)}: {e}")
     
     async def _dashboard_update_loop(self, user_id: int, chat_id: int, position_id: int, message_id: int):
-        """Loop update dashboard INSTANT dengan progress TP/SL real-time"""
+        """Loop update dashboard INSTANT dengan progress TP/SL real-time.
+        
+        Menggunakan asyncio.wait_for dengan timeout yang proper untuk mencegah stuck.
+        """
         update_count = 0
         last_message_text = None
-        dashboard_update_interval = 5  # Optimal - 5 detik update
+        dashboard_update_interval = 5
+        dashboard_operation_timeout = 15.0
+        price_fetch_timeout = 10.0
+        consecutive_timeout_count = 0
+        max_consecutive_timeouts = 5
         
         try:
             while True:
                 try:
-                    await asyncio.sleep(dashboard_update_interval)
+                    await asyncio.wait_for(
+                        asyncio.sleep(dashboard_update_interval),
+                        timeout=dashboard_update_interval + 5.0
+                    )
                     
                     if user_id not in self.active_dashboards:
-                        logger.debug(f"Dashboard removed for user {mask_user_id(user_id)}, stopping loop")
+                        logger.debug(f"Dashboard dihapus untuk user {mask_user_id(user_id)}, menghentikan loop")
                         break
                     
                     if not self.position_tracker:
-                        logger.warning("Position tracker not available, stopping dashboard")
+                        logger.warning("Position tracker tidak tersedia, menghentikan dashboard")
                         break
                     
                     session = self.db.get_session()
@@ -2154,11 +2254,11 @@ class TradingBot:
                         ).first()
                         
                         if not position_db:
-                            logger.info(f"Position {position_id} not found in DB, stopping dashboard")
+                            logger.info(f"Position {position_id} tidak ditemukan di DB, menghentikan dashboard")
                             break
                         
                         if position_db.status != 'ACTIVE':
-                            logger.info(f"Position {position_id} is {position_db.status}, sending EXPIRED message")
+                            logger.info(f"Position {position_id} status {position_db.status}, mengirim pesan EXPIRED")
                             
                             try:
                                 expired_msg = (
@@ -2174,22 +2274,39 @@ class TradingBot:
                                 )
                                 
                                 if self.app and self.app.bot:
-                                    await self.app.bot.edit_message_text(
-                                        chat_id=chat_id,
-                                        message_id=message_id,
-                                        text=expired_msg,
-                                        parse_mode='Markdown'
+                                    await asyncio.wait_for(
+                                        self.app.bot.edit_message_text(
+                                            chat_id=chat_id,
+                                            message_id=message_id,
+                                            text=expired_msg,
+                                            parse_mode='Markdown'
+                                        ),
+                                        timeout=dashboard_operation_timeout
                                     )
-                                    logger.info(f"✅ EXPIRED message sent to user {mask_user_id(user_id)}")
-                            except (TelegramError, asyncio.TimeoutError, ValueError) as e:
-                                logger.error(f"Error sending EXPIRED message: {e}")
+                                    logger.info(f"✅ Pesan EXPIRED terkirim ke user {mask_user_id(user_id)}")
+                            except asyncio.TimeoutError:
+                                logger.warning(f"Timeout saat mengirim pesan EXPIRED untuk user {mask_user_id(user_id)}")
+                            except (TelegramError, ValueError) as e:
+                                logger.error(f"Error mengirim pesan EXPIRED: {e}")
                             
                             break
                         
-                        current_price = await self.market_data.get_current_price()
+                        try:
+                            current_price = await asyncio.wait_for(
+                                self.market_data.get_current_price(),
+                                timeout=price_fetch_timeout
+                            )
+                            consecutive_timeout_count = 0
+                        except asyncio.TimeoutError:
+                            consecutive_timeout_count += 1
+                            logger.warning(f"Timeout mengambil harga saat ini (count: {consecutive_timeout_count})")
+                            if consecutive_timeout_count >= max_consecutive_timeouts:
+                                logger.error(f"Terlalu banyak timeout berturut-turut, menghentikan dashboard")
+                                break
+                            continue
                         
                         if current_price is None:
-                            logger.warning("Failed to get current price, skipping update")
+                            logger.warning("Gagal mendapatkan harga saat ini, melewatkan update")
                             continue
                         
                         signal_type = position_db.signal_type
@@ -2214,30 +2331,36 @@ class TradingBot:
                             continue
                         
                         if not self.app or not self.app.bot:
-                            logger.warning("Bot not initialized, cannot update dashboard")
+                            logger.warning("Bot tidak diinisialisasi, tidak bisa update dashboard")
                             break
                         
                         try:
-                            await self.app.bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message_id,
-                                text=message_text,
-                                parse_mode='Markdown'
+                            await asyncio.wait_for(
+                                self.app.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=message_id,
+                                    text=message_text,
+                                    parse_mode='Markdown'
+                                ),
+                                timeout=dashboard_operation_timeout
                             )
                             
                             update_count += 1
                             last_message_text = message_text
-                            logger.debug(f"Dashboard updated #{update_count} for user {mask_user_id(user_id)}")
+                            logger.debug(f"Dashboard diupdate #{update_count} untuk user {mask_user_id(user_id)}")
                             
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout saat mengupdate dashboard untuk user {mask_user_id(user_id)}")
+                            continue
                         except BadRequest as e:
                             if "message is not modified" in str(e).lower():
-                                logger.debug("Message content unchanged, skipping edit")
+                                logger.debug("Konten pesan tidak berubah, melewatkan edit")
                                 continue
                             elif "message to edit not found" in str(e).lower() or "message can't be edited" in str(e).lower():
-                                logger.warning(f"Message {message_id} too old or deleted, stopping dashboard")
+                                logger.warning(f"Pesan {message_id} terlalu lama atau dihapus, menghentikan dashboard")
                                 break
                             else:
-                                logger.error(f"BadRequest editing message: {e}")
+                                logger.error(f"BadRequest saat edit pesan: {e}")
                                 continue
                         
                     finally:
@@ -3224,11 +3347,13 @@ class TradingBot:
                 
                 message_info = ""
                 if update.message:
-                    message_info = f" from user {update.message.from_user.id}"
+                    from_user = update.message.from_user
+                    if from_user:
+                        message_info = f" dari user {from_user.id}"
                     if update.message.text:
                         message_info += f": '{update.message.text}'"
                 
-                logger.info(f"🔄 Processing webhook update {update_id}{message_info}")
+                logger.info(f"🔄 Memproses webhook update {update_id}{message_info}")
                 
                 await self.app.process_update(update)
                 

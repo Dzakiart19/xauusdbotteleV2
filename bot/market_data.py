@@ -94,6 +94,46 @@ def sanitize_price_data(data: Dict) -> Tuple[bool, Dict, Optional[str]]:
     return True, sanitized, None
 
 
+def validate_ohlc_integrity(open_val: float, high_val: float, low_val: float, close_val: float) -> Tuple[bool, Optional[str]]:
+    """Validasi integritas nilai OHLC (Open, High, Low, Close)
+    
+    Validasi yang dilakukan:
+    - High >= Low (high harus lebih besar atau sama dengan low)
+    - High >= Open (high harus lebih besar atau sama dengan open)
+    - High >= Close (high harus lebih besar atau sama dengan close)
+    - Low <= Open (low harus lebih kecil atau sama dengan open)
+    - Low <= Close (low harus lebih kecil atau sama dengan close)
+    
+    Args:
+        open_val: Harga pembukaan
+        high_val: Harga tertinggi
+        low_val: Harga terendah
+        close_val: Harga penutupan
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not all(is_valid_price(p) for p in [open_val, high_val, low_val, close_val]):
+        return False, "Satu atau lebih nilai OHLC tidak valid (NaN/Inf/negatif)"
+    
+    if high_val < low_val:
+        return False, f"High ({high_val:.5f}) lebih kecil dari Low ({low_val:.5f})"
+    
+    if high_val < open_val:
+        return False, f"High ({high_val:.5f}) lebih kecil dari Open ({open_val:.5f})"
+    
+    if high_val < close_val:
+        return False, f"High ({high_val:.5f}) lebih kecil dari Close ({close_val:.5f})"
+    
+    if low_val > open_val:
+        return False, f"Low ({low_val:.5f}) lebih besar dari Open ({open_val:.5f})"
+    
+    if low_val > close_val:
+        return False, f"Low ({low_val:.5f}) lebih besar dari Close ({close_val:.5f})"
+    
+    return True, None
+
+
 class OHLCBuilder:
     def __init__(self, timeframe_minutes: int = 1):
         if timeframe_minutes <= 0:
@@ -105,9 +145,15 @@ class OHLCBuilder:
         self.candles = deque(maxlen=500)
         self.tick_count = 0
         self.nan_scrub_count = 0
+        self.invalid_ohlc_count = 0
         self.last_completed_candle_timestamp: Optional[datetime] = None
         self.candle_close_callbacks: List[Callable] = []
-        logger.debug(f"OHLCBuilder diinisialisasi untuk M{timeframe_minutes}")
+        
+        import threading
+        self._tick_lock = threading.Lock()
+        self._callback_lock = threading.Lock()
+        
+        logger.debug(f"OHLCBuilder diinisialisasi untuk M{timeframe_minutes} dengan thread locks")
     
     def _scrub_nan_prices(self, prices: Dict) -> Tuple[bool, Dict]:
         """Scrub NaN values from price dictionary at builder boundary
@@ -177,93 +223,138 @@ class OHLCBuilder:
             return False, f"Validation error: {str(e)}"
         
     def add_tick(self, bid: float, ask: float, timestamp: datetime):
-        """Add tick data with validation, NaN scrubbing, and error handling"""
-        try:
-            is_valid, error_msg = self._validate_tick_data(bid, ask, timestamp)
-            if not is_valid:
-                logger.warning(f"Invalid tick data rejected: {error_msg}")
-                return
-            
-            mid_price = (bid + ask) / 2.0
-            
-            if math.isnan(mid_price) or math.isinf(mid_price):
-                logger.warning(f"NaN/Inf mid_price calculated from bid={bid}, ask={ask}")
-                return
-            
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=pytz.UTC)
-            
-            candle_start = timestamp.replace(
-                second=0, 
-                microsecond=0,
-                minute=(timestamp.minute // self.timeframe_minutes) * self.timeframe_minutes
-            )
-            
-            if self.current_candle is None or self.current_candle['timestamp'] != candle_start:
-                if self.current_candle is not None:
-                    is_valid_candle, scrubbed_candle = self._scrub_nan_prices(self.current_candle)
-                    if is_valid_candle:
-                        self.candles.append(scrubbed_candle.copy())
-                        logger.debug(f"M{self.timeframe_minutes} candle selesai: O={scrubbed_candle['open']:.2f} H={scrubbed_candle['high']:.2f} L={scrubbed_candle['low']:.2f} C={scrubbed_candle['close']:.2f} V={scrubbed_candle['volume']}")
-                        
-                        self.last_completed_candle_timestamp = scrubbed_candle['timestamp']
-                        logger.info(f"🕯️ Candle M{self.timeframe_minutes} ditutup pada {self.last_completed_candle_timestamp}")
-                        
-                        for callback in self.candle_close_callbacks:
-                            try:
-                                callback(scrubbed_candle.copy(), self.timeframe_minutes)
-                            except Exception as cb_error:
-                                logger.error(f"Error saat memanggil callback candle close: {cb_error}")
-                    else:
-                        logger.warning(f"Membuang candle M{self.timeframe_minutes} tidak valid karena nilai NaN")
+        """Menambahkan tick data dengan validasi, NaN scrubbing, dan thread-safety
+        
+        Menggunakan _tick_lock untuk proteksi race condition pada concurrent tick processing.
+        """
+        is_valid, error_msg = self._validate_tick_data(bid, ask, timestamp)
+        if not is_valid:
+            logger.warning(f"Data tick tidak valid ditolak: {error_msg}")
+            return
+        
+        if not is_valid_price(bid) or not is_valid_price(ask):
+            logger.warning(f"Harga bid/ask tidak valid (NaN/Inf/negatif): bid={bid}, ask={ask}")
+            return
+        
+        mid_price = (bid + ask) / 2.0
+        
+        if math.isnan(mid_price) or math.isinf(mid_price):
+            logger.warning(f"NaN/Inf mid_price dihitung dari bid={bid}, ask={ask}")
+            return
+        
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=pytz.UTC)
+        
+        candle_start = timestamp.replace(
+            second=0, 
+            microsecond=0,
+            minute=(timestamp.minute // self.timeframe_minutes) * self.timeframe_minutes
+        )
+        
+        with self._tick_lock:
+            try:
+                if self.current_candle is None or self.current_candle['timestamp'] != candle_start:
+                    if self.current_candle is not None:
+                        is_valid_candle, scrubbed_candle = self._scrub_nan_prices(self.current_candle)
+                        if is_valid_candle:
+                            ohlc_valid, ohlc_err = validate_ohlc_integrity(
+                                scrubbed_candle['open'], 
+                                scrubbed_candle['high'], 
+                                scrubbed_candle['low'], 
+                                scrubbed_candle['close']
+                            )
+                            if ohlc_valid:
+                                self.candles.append(scrubbed_candle.copy())
+                                logger.debug(f"M{self.timeframe_minutes} candle selesai: O={scrubbed_candle['open']:.2f} H={scrubbed_candle['high']:.2f} L={scrubbed_candle['low']:.2f} C={scrubbed_candle['close']:.2f} V={scrubbed_candle['volume']}")
+                                
+                                self.last_completed_candle_timestamp = scrubbed_candle['timestamp']
+                                logger.info(f"🕯️ Candle M{self.timeframe_minutes} ditutup pada {self.last_completed_candle_timestamp}")
+                                
+                                callbacks_to_call = []
+                                with self._callback_lock:
+                                    callbacks_to_call = list(self.candle_close_callbacks)
+                                
+                                for callback in callbacks_to_call:
+                                    try:
+                                        callback(scrubbed_candle.copy(), self.timeframe_minutes)
+                                    except Exception as cb_error:
+                                        logger.error(f"Error saat memanggil callback candle close: {cb_error}")
+                            else:
+                                self.invalid_ohlc_count += 1
+                                logger.warning(f"Membuang candle M{self.timeframe_minutes} tidak valid: {ohlc_err} (total invalid: {self.invalid_ohlc_count})")
+                        else:
+                            logger.warning(f"Membuang candle M{self.timeframe_minutes} tidak valid karena nilai NaN")
+                    
+                    self.current_candle = {
+                        'timestamp': candle_start,
+                        'open': mid_price,
+                        'high': mid_price,
+                        'low': mid_price,
+                        'close': mid_price,
+                        'volume': 0
+                    }
+                    self.tick_count = 0
                 
-                self.current_candle = {
-                    'timestamp': candle_start,
-                    'open': mid_price,
-                    'high': mid_price,
-                    'low': mid_price,
-                    'close': mid_price,
-                    'volume': 0
-                }
-                self.tick_count = 0
-            
-            self.current_candle['high'] = max(self.current_candle['high'], mid_price)
-            self.current_candle['low'] = min(self.current_candle['low'], mid_price)
-            self.current_candle['close'] = mid_price
-            self.tick_count += 1
-            self.current_candle['volume'] = self.tick_count
-            
-        except Exception as e:
-            logger.error(f"Error adding tick to M{self.timeframe_minutes} builder: {e}")
-            logger.debug(f"Tick data: bid={bid}, ask={ask}, timestamp={timestamp}")
+                self.current_candle['high'] = max(self.current_candle['high'], mid_price)
+                self.current_candle['low'] = min(self.current_candle['low'], mid_price)
+                self.current_candle['close'] = mid_price
+                self.tick_count += 1
+                self.current_candle['volume'] = self.tick_count
+                
+            except Exception as e:
+                logger.error(f"Error menambahkan tick ke M{self.timeframe_minutes} builder: {e}")
+                logger.debug(f"Tick data: bid={bid}, ask={ask}, timestamp={timestamp}")
         
     def get_dataframe(self, limit: int = 100) -> Optional[pd.DataFrame]:
-        """Get DataFrame with validation, NaN filtering, and error handling"""
+        """Mendapatkan DataFrame dengan validasi, NaN filtering, OHLC integrity check, dan thread-safety
+        
+        Menggunakan _tick_lock untuk proteksi thread-safety saat mengakses candle data.
+        """
         try:
             if limit <= 0:
-                logger.warning(f"Invalid limit: {limit}. Using default 100")
+                logger.warning(f"Limit tidak valid: {limit}. Menggunakan default 100")
                 limit = 100
             
-            all_candles = []
-            for candle in self.candles:
-                is_valid, scrubbed = self._scrub_nan_prices(candle)
-                if is_valid:
-                    all_candles.append(scrubbed)
-            
-            if self.current_candle:
-                is_valid, scrubbed = self._scrub_nan_prices(self.current_candle)
-                if is_valid:
-                    all_candles.append(scrubbed)
+            with self._tick_lock:
+                all_candles = []
+                ohlc_invalid_count = 0
+                
+                for candle in self.candles:
+                    is_valid, scrubbed = self._scrub_nan_prices(candle)
+                    if is_valid:
+                        ohlc_valid, _ = validate_ohlc_integrity(
+                            scrubbed['open'], scrubbed['high'], 
+                            scrubbed['low'], scrubbed['close']
+                        )
+                        if ohlc_valid:
+                            all_candles.append(scrubbed)
+                        else:
+                            ohlc_invalid_count += 1
+                
+                if self.current_candle:
+                    is_valid, scrubbed = self._scrub_nan_prices(self.current_candle)
+                    if is_valid:
+                        ohlc_valid, _ = validate_ohlc_integrity(
+                            scrubbed['open'], scrubbed['high'], 
+                            scrubbed['low'], scrubbed['close']
+                        )
+                        if ohlc_valid:
+                            all_candles.append(scrubbed)
+                        else:
+                            ohlc_invalid_count += 1
+                
+                if ohlc_invalid_count > 0:
+                    logger.warning(f"Melewati {ohlc_invalid_count} candle dengan integritas OHLC tidak valid untuk M{self.timeframe_minutes}")
             
             if len(all_candles) == 0:
-                logger.debug(f"No valid candles available for M{self.timeframe_minutes}")
+                logger.debug(f"Tidak ada candle valid tersedia untuk M{self.timeframe_minutes}")
                 return None
             
             df = pd.DataFrame(all_candles)
             
             required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
             if not all(col in df.columns for col in required_columns):
-                logger.error(f"Missing required columns in candle data. Have: {df.columns.tolist()}")
+                logger.error(f"Kolom yang diperlukan tidak ditemukan dalam data candle. Ada: {df.columns.tolist()}")
                 return None
             
             for col in ['open', 'high', 'low', 'close', 'volume']:
@@ -273,7 +364,7 @@ class OHLCBuilder:
             nan_count = nan_mask.sum() if isinstance(nan_mask, pd.Series) else 0
             nan_rows = int(nan_count) if nan_count else 0
             if nan_rows > 0:
-                logger.warning(f"Dropping {nan_rows} rows with NaN values from M{self.timeframe_minutes} DataFrame")
+                logger.warning(f"Menghapus {nan_rows} baris dengan nilai NaN dari DataFrame M{self.timeframe_minutes}")
                 df = df.dropna(subset=['open', 'high', 'low', 'close'])
             
             df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -286,48 +377,61 @@ class OHLCBuilder:
             return df
             
         except Exception as e:
-            logger.error(f"Error creating DataFrame for M{self.timeframe_minutes}: {e}")
+            logger.error(f"Error membuat DataFrame untuk M{self.timeframe_minutes}: {e}")
             return None
     
     def clear(self):
-        """Clear all candles and reset builder state (for safe reload from DB)"""
-        self.candles.clear()
-        self.current_candle = None
-        self.tick_count = 0
-        self.last_completed_candle_timestamp = None
+        """Membersihkan semua candle dan reset state builder (untuk reload dari DB dengan aman)
+        
+        Menggunakan _tick_lock untuk proteksi thread-safety.
+        """
+        with self._tick_lock:
+            self.candles.clear()
+            self.current_candle = None
+            self.tick_count = 0
+            self.last_completed_candle_timestamp = None
         logger.debug(f"OHLCBuilder M{self.timeframe_minutes} dibersihkan")
     
     def register_candle_close_callback(self, callback: Callable) -> None:
         """Daftarkan callback yang akan dipanggil saat candle selesai/ditutup
         
+        Menggunakan _callback_lock untuk proteksi race condition pada subscriber operations.
+        
         Args:
             callback: Fungsi callback dengan signature (candle_data: Dict, timeframe_minutes: int)
         """
-        if callback not in self.candle_close_callbacks:
-            self.candle_close_callbacks.append(callback)
-            logger.info(f"Callback candle close terdaftar untuk M{self.timeframe_minutes}")
+        with self._callback_lock:
+            if callback not in self.candle_close_callbacks:
+                self.candle_close_callbacks.append(callback)
+                logger.info(f"Callback candle close terdaftar untuk M{self.timeframe_minutes}")
     
     def unregister_candle_close_callback(self, callback: Callable) -> None:
         """Hapus callback dari daftar
         
+        Menggunakan _callback_lock untuk proteksi race condition pada subscriber operations.
+        
         Args:
             callback: Fungsi callback yang akan dihapus
         """
-        if callback in self.candle_close_callbacks:
-            self.candle_close_callbacks.remove(callback)
-            logger.info(f"Callback candle close dihapus dari M{self.timeframe_minutes}")
+        with self._callback_lock:
+            if callback in self.candle_close_callbacks:
+                self.candle_close_callbacks.remove(callback)
+                logger.info(f"Callback candle close dihapus dari M{self.timeframe_minutes}")
     
     def get_stats(self) -> Dict:
-        """Get builder statistics including NaN scrub count"""
-        return {
-            'timeframe': f"M{self.timeframe_minutes}",
-            'candle_count': len(self.candles),
-            'has_current_candle': self.current_candle is not None,
-            'tick_count': self.tick_count,
-            'nan_scrub_count': self.nan_scrub_count,
-            'last_completed_candle_timestamp': self.last_completed_candle_timestamp.isoformat() if self.last_completed_candle_timestamp else None,
-            'registered_callbacks': len(self.candle_close_callbacks)
-        }
+        """Mendapatkan statistik builder termasuk NaN scrub count dan invalid OHLC count"""
+        with self._tick_lock:
+            with self._callback_lock:
+                return {
+                    'timeframe': f"M{self.timeframe_minutes}",
+                    'candle_count': len(self.candles),
+                    'has_current_candle': self.current_candle is not None,
+                    'tick_count': self.tick_count,
+                    'nan_scrub_count': self.nan_scrub_count,
+                    'invalid_ohlc_count': self.invalid_ohlc_count,
+                    'last_completed_candle_timestamp': self.last_completed_candle_timestamp.isoformat() if self.last_completed_candle_timestamp else None,
+                    'registered_callbacks': len(self.candle_close_callbacks)
+                }
 
 
 class SubscriberHealthMetrics:
@@ -1688,33 +1792,57 @@ class MarketDataClient:
             return None
     
     async def save_candles_to_db(self, db_manager):
-        """Save latest 100 candles to database for persistence with race condition protection"""
+        """Menyimpan 100 candle terakhir ke database untuk persistensi dengan proteksi race condition
+        
+        Menggunakan candle_lock dan db_write_lock untuk thread-safety dan konsistensi data.
+        Menambahkan validasi OHLC integrity sebelum menyimpan.
+        """
         async with self.candle_lock:
             try:
                 from bot.database import CandleData
                 from sqlalchemy import delete
                 
                 snapshots = {}
+                ohlc_invalid_count = 0
+                
                 for timeframe, builder in [('M1', self.m1_builder), ('M5', self.m5_builder)]:
                     valid_candles = []
                     for candle in builder.candles:
                         is_valid, scrubbed = builder._scrub_nan_prices(candle)
                         if is_valid:
-                            valid_candles.append(scrubbed)
+                            ohlc_valid, _ = validate_ohlc_integrity(
+                                scrubbed['open'], scrubbed['high'],
+                                scrubbed['low'], scrubbed['close']
+                            )
+                            if ohlc_valid:
+                                valid_candles.append(scrubbed)
+                            else:
+                                ohlc_invalid_count += 1
                     snapshots[timeframe] = valid_candles
                     
                     if builder.current_candle:
                         is_valid, scrubbed = builder._scrub_nan_prices(builder.current_candle)
                         if is_valid:
-                            snapshots[timeframe + '_current'] = scrubbed
+                            ohlc_valid, _ = validate_ohlc_integrity(
+                                scrubbed['open'], scrubbed['high'],
+                                scrubbed['low'], scrubbed['close']
+                            )
+                            if ohlc_valid:
+                                snapshots[timeframe + '_current'] = scrubbed
+                            else:
+                                ohlc_invalid_count += 1
+                                snapshots[timeframe + '_current'] = None
                         else:
                             snapshots[timeframe + '_current'] = None
                     else:
                         snapshots[timeframe + '_current'] = None
                 
-                logger.debug("Created thread-safe snapshots of candle data (including current_candle) for DB save")
+                if ohlc_invalid_count > 0:
+                    logger.warning(f"Melewati {ohlc_invalid_count} candle dengan integritas OHLC tidak valid saat menyimpan ke DB")
+                
+                logger.debug("Membuat snapshot thread-safe dari data candle (termasuk current_candle) untuk disimpan ke DB")
             except Exception as e:
-                logger.error(f"Error creating candle snapshots: {e}")
+                logger.error(f"Error membuat snapshot candle: {e}")
                 return False
         
         async with self.db_write_lock:
@@ -1846,7 +1974,13 @@ class MarketDataClient:
                         
                         if any(math.isnan(v) or math.isinf(v) for v in [open_val, high_val, low_val, close_val]):
                             nan_skipped += 1
-                            logger.warning(f"Skipping candle with NaN/Inf at {ts} for {timeframe}")
+                            logger.warning(f"Melewati candle dengan NaN/Inf pada {ts} untuk {timeframe}")
+                            continue
+                        
+                        is_valid_ohlc, ohlc_error = validate_ohlc_integrity(open_val, high_val, low_val, close_val)
+                        if not is_valid_ohlc:
+                            nan_skipped += 1
+                            logger.warning(f"Melewati candle {timeframe} pada {ts} - integritas OHLC gagal: {ohlc_error}")
                             continue
                         
                         candle_dict = {

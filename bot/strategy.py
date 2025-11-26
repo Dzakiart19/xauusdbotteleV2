@@ -1180,10 +1180,10 @@ class TradingStrategy:
                             confidence_reasons.append(f"📊 Market Bias CEREBR: Bearish ({safe_float(cerebr_value, 50.0):.1f}%)")
                     
                     macd_valid = is_valid_number(macd) and is_valid_number(macd_signal)
-                    if macd_valid:
+                    if macd_valid and macd is not None and macd_signal is not None:
                         macd_prev = indicators.get('macd_prev')
                         macd_signal_prev = indicators.get('macd_signal_prev')
-                        if is_valid_number(macd_prev) and is_valid_number(macd_signal_prev):
+                        if is_valid_number(macd_prev) and is_valid_number(macd_signal_prev) and macd_prev is not None and macd_signal_prev is not None:
                             if signal == 'BUY' and macd_prev <= macd_signal_prev and macd > macd_signal:
                                 confidence_reasons.append("MACD bullish crossover")
                             elif signal == 'SELL' and macd_prev >= macd_signal_prev and macd < macd_signal:
@@ -1222,22 +1222,37 @@ class TradingStrategy:
                     logger.info(f"📊 Partial Score: {mc_result['total_score']}/100 (requires all 6 filters)")
                     return None
             else:
-                trend_passed, trend_signal, trend_reason = self.check_trend_filter(indicators)
-                if trend_passed:
-                    momentum_passed, _ = self.check_momentum_filter(indicators, trend_signal)
-                    volume_passed, _ = self.check_volume_vwap_filter(indicators, trend_signal)
+                if mc_result['total_score'] >= 50:
+                    signal = mc_result['signal_type']
+                    logger.info(f"✅ MANUAL SIGNAL APPROVED - Score: {mc_result['total_score']}/100 (threshold: 50)")
+                    confidence_reasons = mc_result.get('confidence_reasons', [])
+                    confidence_reasons.append(f"Manual Mode Score: {mc_result['total_score']}/100")
                     
-                    if momentum_passed or volume_passed:
-                        signal = trend_signal
-                        confidence_reasons.append(f"Manual: Trend filter passed - {trend_signal}")
-                        
-                        if trf_trend is not None:
-                            if (signal == 'BUY' and trf_trend == 1) or (signal == 'SELL' and trf_trend == -1):
-                                confidence_reasons.append("Twin Range Filter confirmed")
-                        
-                        if cerebr_bias is not None and cerebr_value is not None:
-                            if (signal == 'BUY' and cerebr_bias == 1) or (signal == 'SELL' and cerebr_bias == -1):
-                                confidence_reasons.append(f"CEREBR confirmed ({safe_float(cerebr_value, 50.0):.1f}%)")
+                    if trf_trend is not None:
+                        if signal == 'BUY' and trf_trend == 1:
+                            confidence_reasons.append("🎯 Twin Range Filter: Bullish confirmed")
+                        elif signal == 'SELL' and trf_trend == -1:
+                            confidence_reasons.append("🎯 Twin Range Filter: Bearish confirmed")
+                    
+                    if cerebr_bias is not None and cerebr_value is not None:
+                        if signal == 'BUY' and cerebr_bias == 1:
+                            confidence_reasons.append(f"📊 Market Bias CEREBR: Bullish ({safe_float(cerebr_value, 50.0):.1f}%)")
+                        elif signal == 'SELL' and cerebr_bias == -1:
+                            confidence_reasons.append(f"📊 Market Bias CEREBR: Bearish ({safe_float(cerebr_value, 50.0):.1f}%)")
+                else:
+                    failed_filters = []
+                    if not mc_result['trend_filter']['passed']:
+                        failed_filters.append("Trend")
+                    if not mc_result['momentum_filter']['passed']:
+                        failed_filters.append("Momentum")
+                    if not mc_result['volume_vwap_filter']['passed']:
+                        failed_filters.append("Volume/VWAP")
+                    if not mc_result['price_action']['passed']:
+                        failed_filters.append("Price Action")
+                    
+                    logger.info(f"❌ Manual signal blocked - Score: {mc_result['total_score']}/100 (requires ≥50)")
+                    logger.info(f"Failed filters: {', '.join(failed_filters) if failed_filters else 'All filters passed but score too low'}")
+                    return None
             
             if signal:
                 try:

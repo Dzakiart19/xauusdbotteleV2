@@ -390,10 +390,10 @@ class TradingBot:
                 self._cache_telemetry['rollbacks'] += 1
                 logger.debug(f"Signal cache rolled back: {signal_hash}")
     
-    async def _clear_signal_cache(self, user_id: int = None):
+    async def _clear_signal_cache(self, user_id: Optional[int] = None):
         """Clear signal cache for user or all users."""
         async with self._cache_lock:
-            if user_id:
+            if user_id is not None:
                 cache_keys = list(self.sent_signals_cache.keys())
                 for k in cache_keys:
                     if k.startswith(f"{user_id}_"):
@@ -940,7 +940,7 @@ class TradingBot:
         """Alias untuk get_cache_stats() untuk backward compatibility."""
         return self.get_cache_stats()
     
-    async def register_pending_chart(self, user_id: int, chart_path: str, signal_type: str = None):
+    async def register_pending_chart(self, user_id: int, chart_path: str, signal_type: Optional[str] = None):
         """Register a pending chart for cleanup tracking.
         
         Args:
@@ -951,7 +951,7 @@ class TradingBot:
         async with self._chart_cleanup_lock:
             self._pending_charts[user_id] = {
                 'chart_path': chart_path,
-                'signal_type': signal_type,
+                'signal_type': signal_type if signal_type is not None else '',
                 'created_at': datetime.now(),
                 'status': 'pending'
             }
@@ -1251,6 +1251,9 @@ class TradingBot:
                 pass
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None or update.effective_chat is None:
+            return
+        
         try:
             if not self.is_authorized(update.effective_user.id):
                 return
@@ -1308,6 +1311,9 @@ class TradingBot:
                 pass
     
     async def monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None or update.effective_chat is None:
+            return
+        
         try:
             if not self.is_authorized(update.effective_user.id):
                 return
@@ -1382,6 +1388,9 @@ class TradingBot:
                 logger.info(f"✅ Monitoring task created for chat {mask_user_id(chat_id)}")
     
     async def stopmonitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None or update.effective_chat is None:
+            return
+        
         try:
             if not self.is_authorized(update.effective_user.id):
                 return
@@ -1654,16 +1663,17 @@ class TradingBot:
         
         await self.rate_limiter.acquire_async(wait=True)
         
+        if not self.app or not self.app.bot:
+            raise ValidationError("Bot not initialized")
+        
         try:
             return await asyncio.wait_for(
                 self.app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            # Fallback ke plain text jika Markdown timeout
             logger.warning(f"Markdown message timeout, trying plain text fallback")
             try:
-                # Strip Markdown formatting untuk plain text
                 plain_text = text.replace('*', '').replace('_', '').replace('`', '')
                 return await asyncio.wait_for(
                     self.app.bot.send_message(chat_id=chat_id, text=plain_text, parse_mode=None),
@@ -1677,7 +1687,7 @@ class TradingBot:
                 raise TimedOut("Message send timeout")
     
     @retry_on_telegram_error(max_retries=3, initial_delay=1.0)
-    async def _send_telegram_photo(self, chat_id: int, photo_path: str, caption: str = None, timeout: float = 90.0):
+    async def _send_telegram_photo(self, chat_id: int, photo_path: str, caption: Optional[str] = None, timeout: float = 90.0):
         """Send Telegram photo with retry logic and validation"""
         if not validate_chat_id(chat_id):
             raise ValidationError(f"Invalid chat_id: {chat_id}")
@@ -1689,11 +1699,14 @@ class TradingBot:
         if not os.path.exists(photo_path):
             raise ValidationError(f"Photo file not found: {photo_path}")
         
-        if caption and len(caption) > 1024:
+        if caption is not None and len(caption) > 1024:
             logger.warning(f"Caption too long ({len(caption)} chars), truncating")
             caption = caption[:1020] + "..."
         
         await self.rate_limiter.acquire_async(wait=True)
+        
+        if not self.app or not self.app.bot:
+            raise ValidationError("Bot not initialized")
         
         try:
             with open(photo_path, 'rb') as photo:
@@ -1702,7 +1715,6 @@ class TradingBot:
                     timeout=timeout
                 )
         except asyncio.TimeoutError:
-            # Fallback: coba kirim tanpa caption untuk reduce payload
             logger.warning(f"Photo with caption timeout, trying without caption")
             try:
                 with open(photo_path, 'rb') as photo:
@@ -2083,13 +2095,14 @@ class TradingBot:
                                     f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"
                                 )
                                 
-                                await self.app.bot.edit_message_text(
-                                    chat_id=chat_id,
-                                    message_id=message_id,
-                                    text=expired_msg,
-                                    parse_mode='Markdown'
-                                )
-                                logger.info(f"✅ EXPIRED message sent to user {mask_user_id(user_id)}")
+                                if self.app and self.app.bot:
+                                    await self.app.bot.edit_message_text(
+                                        chat_id=chat_id,
+                                        message_id=message_id,
+                                        text=expired_msg,
+                                        parse_mode='Markdown'
+                                    )
+                                    logger.info(f"✅ EXPIRED message sent to user {mask_user_id(user_id)}")
                             except (TelegramError, asyncio.TimeoutError, ValueError) as e:
                                 logger.error(f"Error sending EXPIRED message: {e}")
                             
@@ -2121,6 +2134,10 @@ class TradingBot:
                         
                         if message_text == last_message_text:
                             continue
+                        
+                        if not self.app or not self.app.bot:
+                            logger.warning("Bot not initialized, cannot update dashboard")
+                            break
                         
                         try:
                             await self.app.bot.edit_message_text(
@@ -2183,6 +2200,9 @@ class TradingBot:
                 await self.stop_dashboard(user_id)
     
     async def riwayat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2242,6 +2262,9 @@ class TradingBot:
                 session.close()
     
     async def performa_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2315,6 +2338,9 @@ class TradingBot:
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tampilkan statistik harian dengan format profesional"""
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2353,6 +2379,9 @@ class TradingBot:
                 pass
     
     async def analytics_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2428,6 +2457,9 @@ class TradingBot:
             await update.message.reply_text("❌ Error mengambil analytics.")
     
     async def systemhealth_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2488,6 +2520,9 @@ class TradingBot:
     
     async def tasks_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show scheduled tasks status"""
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2548,6 +2583,9 @@ class TradingBot:
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show active positions with dynamic SL/TP tracking info"""
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2629,6 +2667,9 @@ class TradingBot:
             await update.message.reply_text("❌ Error mengambil status posisi.")
     
     async def getsignal_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None or update.effective_chat is None:
+            return
+        
         if not self.is_authorized(update.effective_user.id):
             return
         
@@ -2739,6 +2780,9 @@ class TradingBot:
             await update.message.reply_text("❌ Error membuat sinyal. Coba lagi nanti.")
     
     async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         try:
             if not self.is_authorized(update.effective_user.id):
                 return
@@ -2768,6 +2812,9 @@ class TradingBot:
                 pass
     
     async def riset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user is None or update.message is None:
+            return
+        
         if not self.is_admin(update.effective_user.id):
             await update.message.reply_text("⛔ Perintah ini hanya untuk admin.")
             return
@@ -3067,6 +3114,8 @@ class TradingBot:
             from telegram import Update
             import json
             
+            parsed_data: Any = None
+            
             if isinstance(update_data, Update):
                 update = update_data
                 logger.info(f"📥 Received native telegram.Update object: {update.update_id}")
@@ -3201,8 +3250,11 @@ class TradingBot:
                 logger.warning(f"Could not create instance lock: {e}")
             
             logger.info("Starting Telegram bot polling...")
-            await self.app.updater.start_polling()
-            logger.info("Telegram bot is running!")
+            if self.app and self.app.updater:
+                await self.app.updater.start_polling()
+                logger.info("Telegram bot is running!")
+            else:
+                logger.error("Bot or updater not initialized, cannot start polling")
     
     async def stop(self):
         logger.info("=" * 50)
@@ -3217,8 +3269,6 @@ class TradingBot:
                 os.remove(self.instance_lock_file)
                 logger.info("✅ Bot instance lock removed")
             except OSError as e:
-                logger.warning(f"Could not remove instance lock (OS error): {e}")
-            except (PermissionError, FileNotFoundError, IOError) as e:
                 logger.warning(f"Could not remove instance lock: {type(e).__name__}: {e}")
         
         if not self.app:

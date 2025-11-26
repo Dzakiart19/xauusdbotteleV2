@@ -14,6 +14,7 @@ from functools import wraps
 import time
 from bot.logger import setup_logger, mask_user_id, mask_token, sanitize_log_message
 from bot.database import Trade, Position, Performance
+from sqlalchemy.exc import SQLAlchemyError
 from bot.signal_session_manager import SignalSessionManager
 from bot.message_templates import MessageFormatter
 from bot.resilience import RateLimiter
@@ -59,7 +60,7 @@ def validate_user_id(user_id_str: str) -> tuple[bool, Optional[int], Optional[st
         
     except ValueError:
         return False, None, "Format user ID tidak valid"
-    except Exception as e:
+    except (TypeError, AttributeError) as e:
         return False, None, f"Error validasi user ID: {str(e)}"
 
 def validate_duration_days(duration_str: str) -> tuple[bool, Optional[int], Optional[str]]:
@@ -89,7 +90,7 @@ def validate_duration_days(duration_str: str) -> tuple[bool, Optional[int], Opti
         
     except ValueError:
         return False, None, "Format durasi tidak valid"
-    except Exception as e:
+    except (TypeError, AttributeError) as e:
         return False, None, f"Error validasi durasi: {str(e)}"
 
 def sanitize_command_argument(arg: str, max_length: int = 100) -> str:
@@ -191,8 +192,11 @@ def retry_on_telegram_error(max_retries: int = 3, initial_delay: float = 1.0):
                     logger.error(f"Telegram API error in {func.__name__}: {e}")
                     raise
                     
-                except Exception as e:
-                    logger.error(f"Unexpected error in {func.__name__}: {type(e).__name__}: {e}")
+                except asyncio.CancelledError:
+                    logger.info(f"Task cancelled in {func.__name__}")
+                    raise
+                except (ValueError, TypeError, AttributeError, KeyError) as e:
+                    logger.error(f"Data error in {func.__name__}: {type(e).__name__}: {e}")
                     raise
             
             if last_exception:
@@ -211,7 +215,7 @@ def validate_chat_id(chat_id: Any) -> bool:
         if isinstance(chat_id, str):
             return chat_id.lstrip('-').isdigit()
         return False
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return False
 
 class TradingBot:
@@ -255,7 +259,7 @@ class TradingBot:
         self.tick_throttle_seconds = 3.0  # Minimum interval between signal checks (match global cooldown)
         logger.info(f"✅ Optimized signal detection: global_cooldown={self.global_signal_cooldown}s, tick_throttle={self.tick_throttle_seconds}s")
         
-        self.sent_signals_cache: Dict[str, Dict[str, any]] = {}
+        self.sent_signals_cache: Dict[str, Dict[str, Any]] = {}
         self.signal_cache_expiry_seconds = 120
         self.signal_price_tolerance_pips = 10.0
         self._cache_lock = asyncio.Lock()
@@ -277,7 +281,7 @@ class TradingBot:
             'last_cleanup_time': None,
             'last_cleanup_count': 0,
         }
-        self._pending_charts: Dict[int, Dict[str, any]] = {}
+        self._pending_charts: Dict[int, Dict[str, Any]] = {}
         self._chart_eviction_callbacks: List[Callable] = []
         logger.info("✅ Two-phase anti-duplicate signal cache initialized (pending→confirmed) with telemetry")
         
@@ -436,7 +440,7 @@ class TradingBot:
                     reason='user_blocked', 
                     notify=False
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ValueError, AttributeError) as e:
                 logger.debug(f"Could not end session for blocked user: {e}")
         
         if self.alert_system:
@@ -447,7 +451,7 @@ class TradingBot:
                     message=f"User {mask_user_id(chat_id)} telah memblokir bot atau chat tidak dapat diakses",
                     context={'chat_id': chat_id, 'error': str(error)}
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ConnectionError) as e:
                 logger.debug(f"Could not send alert for blocked user: {e}")
     
     async def _handle_chat_migrated(self, old_chat_id: int, error: ChatMigrated) -> Optional[int]:
@@ -493,7 +497,7 @@ class TradingBot:
         if self.signal_session_manager:
             try:
                 await self.signal_session_manager.migrate_user_sessions(old_chat_id, new_chat_id)
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ValueError, KeyError) as e:
                 logger.warning(f"Could not migrate sessions for chat migration: {e}")
         
         if self.alert_system:
@@ -504,7 +508,7 @@ class TradingBot:
                     message=f"Chat {mask_user_id(old_chat_id)} migrated to {mask_user_id(new_chat_id)}",
                     context={'old_chat_id': old_chat_id, 'new_chat_id': new_chat_id}
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ConnectionError) as e:
                 logger.debug(f"Could not send migration alert: {e}")
         
         return new_chat_id
@@ -534,7 +538,7 @@ class TradingBot:
                     message=f"Bot token tidak valid atau telah di-revoke. Bot akan berhenti.\nError: {error}",
                     context={'error': str(error), 'timestamp': datetime.now().isoformat()}
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ConnectionError, OSError) as e:
                 logger.error(f"Could not send critical alert for unauthorized error: {e}")
         
         if self.error_handler:
@@ -544,7 +548,7 @@ class TradingBot:
                     error=error,
                     context={'action': 'bot_shutdown_required'}
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ValueError, AttributeError) as e:
                 logger.error(f"Error handler failed for unauthorized error: {e}")
         
         logger.critical("🛑 Initiating emergency shutdown due to unauthorized error...")
@@ -576,7 +580,7 @@ class TradingBot:
                         'instance_lock_file': self.instance_lock_file
                     }
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ConnectionError, OSError) as e:
                 logger.error(f"Could not send critical alert for conflict error: {e}")
         
         if self.error_handler:
@@ -586,7 +590,7 @@ class TradingBot:
                     error=error,
                     context={'action': 'check_other_instances'}
                 )
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, ValueError, AttributeError) as e:
                 logger.error(f"Error handler failed for conflict error: {e}")
         
         logger.critical("🛑 This instance will stop to avoid conflicts...")
@@ -640,7 +644,7 @@ class TradingBot:
                         error=error,
                         context={'chat_id': chat_id, 'operation': context}
                     )
-                except Exception as e:
+                except (TelegramError, asyncio.TimeoutError, ValueError, AttributeError) as e:
                     logger.debug(f"Could not track bad request error: {e}")
     
     async def start_background_cleanup_tasks(self):
@@ -776,7 +780,7 @@ class TradingBot:
                     cleaned = await self._cleanup_expired_cache_entries()
                     if cleaned > 0:
                         logger.debug(f"Signal cache cleanup: removed {cleaned} expired entries")
-                except Exception as e:
+                except (asyncio.TimeoutError, KeyError, ValueError, RuntimeError) as e:
                     logger.error(f"Error in signal cache cleanup: {e}")
                     
         except asyncio.CancelledError:
@@ -834,7 +838,7 @@ class TradingBot:
                     cleaned = await self._cleanup_stale_dashboards(max_dashboard_age_seconds)
                     if cleaned > 0:
                         logger.info(f"Dashboard cleanup: removed {cleaned} stale entries")
-                except Exception as e:
+                except (asyncio.TimeoutError, KeyError, ValueError, RuntimeError) as e:
                     logger.error(f"Error in dashboard cleanup: {e}")
                     
         except asyncio.CancelledError:
@@ -868,7 +872,7 @@ class TradingBot:
                     if is_stale:
                         stale_users.append(user_id)
                         
-                except Exception as e:
+                except (asyncio.CancelledError, asyncio.InvalidStateError, KeyError, TypeError) as e:
                     logger.error(f"Error checking dashboard for user {user_id}: {e}")
                     stale_users.append(user_id)
             
@@ -928,7 +932,7 @@ class TradingBot:
         except AttributeError as e:
             logger.warning(f"Attribute error getting cache stats (bot may not be fully initialized): {e}")
             return {'error': str(e), 'initialized': False}
-        except Exception as e:
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as e:
             logger.error(f"Unexpected error getting cache stats: {type(e).__name__}: {e}")
             return {'error': str(e)}
     
@@ -994,13 +998,13 @@ class TradingBot:
                                 await callback(user_id, chart_path, reason)
                             else:
                                 callback(user_id, chart_path, reason)
-                        except Exception as e:
+                        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, RuntimeError) as e:
                             logger.error(f"Error in chart eviction callback: {e}")
                     
                     return True
                 except FileNotFoundError:
                     logger.debug(f"Chart already deleted: {chart_path}")
-                except Exception as e:
+                except (PermissionError, OSError, IOError) as e:
                     logger.warning(f"Failed to evict chart {chart_path}: {e}")
             return True
         return False
@@ -1034,7 +1038,7 @@ class TradingBot:
                     cleaned = await self._cleanup_stale_pending_charts(pending_chart_ttl_seconds)
                     if cleaned > 0:
                         logger.info(f"Pending chart cleanup: evicted {cleaned} stale charts")
-                except Exception as e:
+                except (asyncio.TimeoutError, OSError, IOError, KeyError, ValueError) as e:
                     logger.error(f"Error in pending chart cleanup: {e}")
                     
         except asyncio.CancelledError:
@@ -1085,7 +1089,7 @@ class TradingBot:
                     cleaned += 1
                 except FileNotFoundError:
                     pass
-                except Exception as e:
+                except (PermissionError, OSError, IOError) as e:
                     logger.warning(f"Failed to cleanup stale chart {chart_path}: {e}")
         
         return cleaned
@@ -1112,7 +1116,7 @@ class TradingBot:
                     try:
                         os.remove(chart_path)
                         logger.debug(f"Cleaned up pending chart: {chart_path}")
-                    except Exception as e:
+                    except (FileNotFoundError, PermissionError, OSError, IOError) as e:
                         logger.warning(f"Failed to cleanup chart {chart_path}: {e}")
             
             self._pending_charts.clear()
@@ -1139,9 +1143,9 @@ class TradingBot:
                             try:
                                 os.remove(chart_path)
                                 logger.info(f"🗑️ Cleaned session chart on end: {chart_path}")
-                            except Exception as e:
+                            except (FileNotFoundError, PermissionError, OSError, IOError) as e:
                                 logger.warning(f"Failed to cleanup session chart: {e}")
-                except Exception as e:
+                except (TelegramError, asyncio.TimeoutError, OSError, KeyError, AttributeError) as e:
                     logger.error(f"Error in session end chart cleanup: {e}")
             
             self.signal_session_manager.register_event_handler('on_session_end', on_session_end_chart_cleanup)
@@ -1233,8 +1237,8 @@ class TradingBot:
                 await update.message.reply_text("❌ Terjadi error Telegram. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
-            logger.error(f"Unexpected error in start command: {type(e).__name__}: {e}", exc_info=True)
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Data error in start command: {type(e).__name__}: {e}", exc_info=True)
             try:
                 await update.message.reply_text("❌ Terjadi error saat memproses command. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
@@ -1290,8 +1294,8 @@ class TradingBot:
                 await update.message.reply_text("❌ Error menampilkan bantuan.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
-            logger.error(f"Unexpected error in help command: {type(e).__name__}: {e}", exc_info=True)
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Data error in help command: {type(e).__name__}: {e}", exc_info=True)
             try:
                 await update.message.reply_text("❌ Error menampilkan bantuan.")
             except (TelegramError, asyncio.CancelledError):
@@ -1352,7 +1356,7 @@ class TradingBot:
                 await update.message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError, KeyError, RuntimeError) as e:
             logger.error(f"Unexpected error in monitor command: {type(e).__name__}: {e}", exc_info=True)
             try:
                 await update.message.reply_text("❌ Error memulai monitoring. Silakan coba lagi.")
@@ -1428,7 +1432,7 @@ class TradingBot:
                 await update.message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError, KeyError, RuntimeError) as e:
             logger.error(f"Unexpected error in stopmonitor command: {type(e).__name__}: {e}", exc_info=True)
             try:
                 await update.message.reply_text("❌ Error menghentikan monitoring. Silakan coba lagi.")
@@ -1616,7 +1620,7 @@ class TradingBot:
                     logger.warning(f"Network/Timeout error in monitoring loop for {mask_user_id(chat_id)}: {e}")
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
-                except Exception as e:
+                except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
                     logger.error(f"Error processing tick dalam monitoring loop: {type(e).__name__}: {e}")
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
@@ -1662,7 +1666,7 @@ class TradingBot:
             except asyncio.TimeoutError:
                 logger.error(f"Plain text fallback also timeout for chat {mask_user_id(chat_id)}")
                 raise TimedOut("Message send timeout (fallback failed)")
-            except Exception as fallback_error:
+            except (TelegramError, ValueError, TypeError) as fallback_error:
                 logger.error(f"Fallback error: {fallback_error}")
                 raise TimedOut("Message send timeout")
     
@@ -1703,7 +1707,7 @@ class TradingBot:
             except asyncio.TimeoutError:
                 logger.error(f"Photo send timeout (fallback also failed) for chat {mask_user_id(chat_id)}")
                 raise TimedOut("Photo send timeout (fallback failed)")
-            except Exception as fallback_error:
+            except (TelegramError, IOError, OSError, ValueError) as fallback_error:
                 logger.error(f"Photo fallback error: {fallback_error}")
                 raise TimedOut("Photo send timeout")
     
@@ -1776,7 +1780,7 @@ class TradingBot:
                 session.commit()
                 logger.debug(f"✅ Database committed - Trade:{trade_id} Position:{position_id}")
                 
-            except Exception as e:
+            except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
                 logger.error(f"DB/Position error: {type(e).__name__}: {e}")
                 session.rollback()
                 raise
@@ -1807,14 +1811,14 @@ class TradingBot:
                             try:
                                 signal_message = await self._send_telegram_message(new_chat_id, msg, parse_mode='Markdown', timeout=30.0)
                                 chat_id = new_chat_id
-                            except Exception as retry_error:
+                            except (TelegramError, asyncio.TimeoutError, ValueError) as retry_error:
                                 logger.error(f"Failed to send signal to migrated chat: {retry_error}")
                     except BadRequest as e:
                         await self._handle_bad_request(chat_id, e, context="send_signal_message")
                         try:
                             fallback_msg = f"🚨 SINYAL {signal['signal']} @${signal['entry_price']:.2f} | SL: ${signal['stop_loss']:.2f} | TP: ${signal['take_profit']:.2f}"
                             signal_message = await self._send_telegram_message(chat_id, fallback_msg, parse_mode=None, timeout=15.0)
-                        except Exception as fallback_error:
+                        except (TelegramError, asyncio.TimeoutError, ValueError) as fallback_error:
                             logger.error(f"Fallback message also failed: {fallback_error}")
                     except Conflict as e:
                         await self._handle_conflict_error(e)
@@ -1827,7 +1831,7 @@ class TradingBot:
                         try:
                             fallback_msg = f"🚨 SINYAL {signal['signal']} @${signal['entry_price']:.2f} | SL: ${signal['stop_loss']:.2f} | TP: ${signal['take_profit']:.2f}"
                             await self._send_telegram_message(chat_id, fallback_msg, parse_mode=None, timeout=15.0)
-                        except Exception as fallback_error:
+                        except (TelegramError, asyncio.TimeoutError, ValueError) as fallback_error:
                             logger.error(f"Fallback message also failed: {fallback_error}")
                     
                     if df is not None and len(df) >= 30:
@@ -1867,7 +1871,7 @@ class TradingBot:
                                                 await self._send_telegram_photo(new_chat_id, chart_path, timeout=60.0)
                                                 if self.signal_session_manager:
                                                     await self.signal_session_manager.update_session(user_id, photo_sent=True, chart_path=chart_path)
-                                            except Exception:
+                                            except (TelegramError, asyncio.TimeoutError):
                                                 pass
                                     except BadRequest as e:
                                         await self._handle_bad_request(chat_id, e, context="send_chart_photo")
@@ -1887,7 +1891,7 @@ class TradingBot:
                                     logger.warning(f"Chart generation returned None for {signal['signal']} signal")
                             except asyncio.TimeoutError:
                                 logger.warning("Chart generation timeout - signal sent without chart")
-                            except Exception as e:
+                            except (TelegramError, ValueError, TypeError, IOError, OSError, RuntimeError) as e:
                                 logger.warning(f"Chart generation/send failed: {e}. Signal sent successfully.")
                     else:
                         logger.debug(f"Skipping chart - insufficient candles ({len(df) if df is not None else 0}/30)")
@@ -1901,14 +1905,14 @@ class TradingBot:
                     
             except (ValidationError, ValueError) as e:
                 logger.error(f"Validation error in signal processing: {e}")
-            except Exception as e:
+            except (TelegramError, asyncio.TimeoutError, KeyError, TypeError, AttributeError, RuntimeError) as e:
                 logger.error(f"Error in signal processing: {type(e).__name__}: {e}", exc_info=True)
             finally:
                 if not signal_sent_successfully:
                     await self._rollback_signal_cache(user_id, signal_type, entry_price)
                     logger.debug(f"Signal cache rolled back after failure for user {mask_user_id(user_id)}")
             
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as e:
             logger.error(f"Critical error sending signal: {type(e).__name__}: {e}", exc_info=True)
             await self._rollback_signal_cache(user_id, signal['signal'], signal['entry_price'])
             if self.error_handler:
@@ -1919,7 +1923,7 @@ class TradingBot:
                         self.alert_system.send_system_error(f"Error sending signal: {str(e)}"),
                         timeout=10.0
                     )
-                except Exception as alert_error:
+                except (TelegramError, asyncio.TimeoutError, ConnectionError) as alert_error:
                     logger.error(f"Failed to send error alert: {alert_error}")
     
     async def _on_session_end_handler(self, session):
@@ -1933,7 +1937,7 @@ class TradingBot:
             await self._clear_signal_cache(user_id)
             logger.info(f"✅ Signal cache cleared for user {mask_user_id(user_id)} after session end")
             
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, KeyError, ValueError, AttributeError) as e:
             logger.error(f"Error in session end handler: {e}")
     
     async def start_dashboard(self, user_id: int, chat_id: int, position_id: int, message_id: int):
@@ -1999,8 +2003,8 @@ class TradingBot:
             await self._handle_unauthorized_error(e)
         except (TelegramError, NetworkError, TimedOut) as e:
             logger.error(f"Telegram error starting dashboard for user {mask_user_id(user_id)}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error starting dashboard for user {mask_user_id(user_id)}: {type(e).__name__}: {e}")
+        except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
+            logger.error(f"Data error starting dashboard for user {mask_user_id(user_id)}: {type(e).__name__}: {e}")
     
     async def stop_dashboard(self, user_id: int):
         """Stop dashboard monitoring dan cleanup task"""
@@ -2024,7 +2028,7 @@ class TradingBot:
             duration = (datetime.now(pytz.UTC) - dashboard['started_at']).total_seconds()
             logger.info(f"🛑 Dashboard stopped - User:{mask_user_id(user_id)} Duration:{duration:.1f}s")
             
-        except Exception as e:
+        except (asyncio.CancelledError, asyncio.TimeoutError, KeyError, ValueError, RuntimeError) as e:
             logger.error(f"Error stopping dashboard for user {mask_user_id(user_id)}: {e}")
     
     async def _dashboard_update_loop(self, user_id: int, chat_id: int, position_id: int, message_id: int):
@@ -2080,7 +2084,7 @@ class TradingBot:
                                     parse_mode='Markdown'
                                 )
                                 logger.info(f"✅ EXPIRED message sent to user {mask_user_id(user_id)}")
-                            except Exception as e:
+                            except (TelegramError, asyncio.TimeoutError, ValueError) as e:
                                 logger.error(f"Error sending EXPIRED message: {e}")
                             
                             break
@@ -2161,11 +2165,11 @@ class TradingBot:
                 except (TimedOut, NetworkError) as e:
                     logger.warning(f"Network/Timeout error in dashboard update: {e}")
                     await asyncio.sleep(5)
-                except Exception as e:
+                except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
                     logger.error(f"Error in dashboard update loop: {type(e).__name__}: {e}")
                     await asyncio.sleep(5)
                     
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
             logger.error(f"Critical error in dashboard loop: {type(e).__name__}: {e}")
         
         finally:
@@ -2221,8 +2225,8 @@ class TradingBot:
                 await update.message.reply_text("❌ Error mengambil riwayat.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
-            logger.error(f"Unexpected error fetching history: {type(e).__name__}: {e}")
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Data error fetching history: {type(e).__name__}: {e}")
             try:
                 await update.message.reply_text("❌ Error mengambil riwayat.")
             except (TelegramError, asyncio.CancelledError):
@@ -2293,8 +2297,8 @@ class TradingBot:
                 await update.message.reply_text("❌ Error menghitung performa.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
-            logger.error(f"Unexpected error calculating performance: {type(e).__name__}: {e}")
+        except (ValueError, TypeError, KeyError, AttributeError, ZeroDivisionError) as e:
+            logger.error(f"Data error calculating performance: {type(e).__name__}: {e}")
             try:
                 await update.message.reply_text("❌ Error menghitung performa.")
             except (TelegramError, asyncio.CancelledError):
@@ -2335,8 +2339,8 @@ class TradingBot:
                 await update.message.reply_text("❌ Error mengambil statistik.")
             except (TelegramError, asyncio.CancelledError):
                 pass
-        except Exception as e:
-            logger.error(f"Unexpected error in stats command: {type(e).__name__}: {e}")
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Data error in stats command: {type(e).__name__}: {e}")
             try:
                 await update.message.reply_text("❌ Error mengambil statistik.")
             except (TelegramError, asyncio.CancelledError):
@@ -2413,7 +2417,7 @@ class TradingBot:
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError) as e:
             logger.error(f"Error in analytics command: {e}", exc_info=True)
             await update.message.reply_text("❌ Error mengambil analytics.")
     
@@ -2472,7 +2476,7 @@ class TradingBot:
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError, ImportError) as e:
             logger.error(f"Error in systemhealth command: {e}", exc_info=True)
             await update.message.reply_text("❌ Error mengambil system health.")
     
@@ -2532,7 +2536,7 @@ class TradingBot:
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError) as e:
             logger.error(f"Error in tasks command: {e}", exc_info=True)
             await update.message.reply_text("❌ Error mengambil task status.")
     
@@ -2614,7 +2618,7 @@ class TradingBot:
             session.close()
             await update.message.reply_text(msg, parse_mode='Markdown')
             
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError, SQLAlchemyError) as e:
             logger.error(f"Error fetching position status: {e}")
             await update.message.reply_text("❌ Error mengambil status posisi.")
     
@@ -2724,7 +2728,7 @@ class TradingBot:
             if self.user_manager:
                 self.user_manager.update_user_activity(user_id)
             
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
             logger.error(f"Error generating manual signal: {e}")
             await update.message.reply_text("❌ Error membuat sinyal. Coba lagi nanti.")
     
@@ -2750,11 +2754,11 @@ class TradingBot:
             await update.message.reply_text(msg, parse_mode='Markdown')
             logger.info(f"Settings command executed for user {mask_user_id(update.effective_user.id)}")
             
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError) as e:
             logger.error(f"Error in settings command: {e}", exc_info=True)
             try:
                 await update.message.reply_text("❌ Error menampilkan konfigurasi.")
-            except Exception:
+            except (TelegramError, asyncio.CancelledError):
                 pass
     
     async def riset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2796,7 +2800,7 @@ class TradingBot:
                     logger.info("All monitoring tasks cancelled")
                 except asyncio.TimeoutError:
                     logger.warning("Some monitoring tasks did not complete within timeout")
-                except Exception as e:
+                except (asyncio.CancelledError, ValueError, RuntimeError) as e:
                     logger.error(f"Error during task cleanup: {e}")
             
             self.monitoring_tasks.clear()
@@ -2862,7 +2866,7 @@ class TradingBot:
             await update.message.reply_text(msg, parse_mode='Markdown')
             logger.info(f"Complete system reset by admin {mask_user_id(update.effective_user.id)}")
             
-        except Exception as e:
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as e:
             logger.error(f"Error resetting system: {e}")
             await update.message.reply_text("❌ Error reset sistem. Cek logs untuk detail.")
     
@@ -2885,7 +2889,7 @@ class TradingBot:
                 try:
                     if hasattr(self.chart_generator, '_pending_charts'):
                         self.chart_generator._pending_charts.discard(chart_path)
-                except Exception as e:
+                except (AttributeError, KeyError, TypeError) as e:
                     logger.debug(f"Chart generator notification skipped: {e}")
             
             self.register_chart_eviction_callback(on_chart_eviction_notify)
@@ -3011,7 +3015,7 @@ class TradingBot:
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_delay)
                     
-            except Exception as e:
+            except (ValueError, TypeError, OSError, IOError) as e:
                 error_type = type(e).__name__
                 logger.error(f"Failed to setup webhook (attempt {attempt}/{max_retries}): [{error_type}] {e}")
                 
@@ -3074,7 +3078,7 @@ class TradingBot:
                     try:
                         parsed_data = update_data.to_dict()
                         logger.debug(f"Converted update data via to_dict(): {type(update_data)}")
-                    except Exception as e:
+                    except (AttributeError, TypeError, ValueError) as e:
                         logger.warning(f"Failed to convert via to_dict: {e}")
                 elif not hasattr(update_data, '__getitem__'):
                     logger.warning(f"Update data is not dict-like: {type(update_data)}")
@@ -3109,7 +3113,7 @@ class TradingBot:
             logger.error(f"AttributeError processing update: {e}")
             if self.error_handler:
                 self.error_handler.log_exception(e, "process_webhook_update_attribute")
-        except Exception as e:
+        except (TelegramError, TypeError, KeyError, RuntimeError) as e:
             error_type = type(e).__name__
             logger.error(f"Unexpected error processing webhook update: [{error_type}] {e}")
             if self.error_handler:
@@ -3166,28 +3170,28 @@ class TradingBot:
                                 try:
                                     os.remove(self.instance_lock_file)
                                     logger.info("✅ Stale lock file removed successfully")
-                                except Exception as remove_error:
+                                except (PermissionError, OSError, IOError) as remove_error:
                                     logger.error(f"Failed to remove stale lock: {remove_error}")
                         else:
                             logger.warning(f"Invalid PID in lock file: {pid_str}")
                             logger.info("Removing invalid lock file")
                             try:
                                 os.remove(self.instance_lock_file)
-                            except Exception:
+                            except (PermissionError, OSError, IOError):
                                 pass
-                except Exception as e:
+                except (FileNotFoundError, PermissionError, OSError, IOError, ValueError) as e:
                     logger.error(f"Error reading lock file: {e}")
                     logger.info("Attempting to remove potentially corrupted lock file")
                     try:
                         os.remove(self.instance_lock_file)
-                    except Exception:
+                    except (PermissionError, OSError, IOError):
                         pass
             
             try:
                 with open(self.instance_lock_file, 'w') as f:
                     f.write(str(os.getpid()))
                 logger.info(f"✅ Bot instance lock created: PID {os.getpid()}")
-            except Exception as e:
+            except (PermissionError, OSError, IOError) as e:
                 logger.warning(f"Could not create instance lock: {e}")
             
             logger.info("Starting Telegram bot polling...")
@@ -3208,7 +3212,7 @@ class TradingBot:
                 logger.info("✅ Bot instance lock removed")
             except OSError as e:
                 logger.warning(f"Could not remove instance lock (OS error): {e}")
-            except Exception as e:
+            except (PermissionError, FileNotFoundError, IOError) as e:
                 logger.warning(f"Could not remove instance lock: {type(e).__name__}: {e}")
         
         if not self.app:
@@ -3228,7 +3232,7 @@ class TradingBot:
                 logger.info("✅ Webhook deleted successfully")
             except asyncio.TimeoutError:
                 logger.warning("Webhook deletion timed out after 5s")
-            except Exception as e:
+            except (TelegramError, ConnectionError) as e:
                 logger.error(f"Error deleting webhook: {e}")
         else:
             logger.info("Stopping Telegram bot polling...")
@@ -3241,7 +3245,7 @@ class TradingBot:
                     logger.info("✅ Telegram bot polling stopped")
             except asyncio.TimeoutError:
                 logger.warning("Updater stop timed out after 5s")
-            except Exception as e:
+            except (TelegramError, RuntimeError) as e:
                 logger.error(f"Error stopping updater: {e}")
         
         logger.info("Stopping Telegram application...")
@@ -3250,7 +3254,7 @@ class TradingBot:
             logger.info("✅ Telegram application stopped")
         except asyncio.TimeoutError:
             logger.warning("App stop timed out after 5s")
-        except Exception as e:
+        except (TelegramError, RuntimeError) as e:
             logger.error(f"Error stopping app: {e}")
         
         logger.info("Shutting down Telegram application...")
@@ -3259,7 +3263,7 @@ class TradingBot:
             logger.info("✅ Telegram application shutdown complete")
         except asyncio.TimeoutError:
             logger.warning("App shutdown timed out after 5s")
-        except Exception as e:
+        except (TelegramError, RuntimeError) as e:
             logger.error(f"Error shutting down app: {e}")
         
         logger.info("=" * 50)

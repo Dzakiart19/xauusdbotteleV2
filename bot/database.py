@@ -92,7 +92,7 @@ def retry_on_db_error(max_retries: int = 3, initial_delay: float = 0.1):
                 except SQLAlchemyDatabaseError as e:
                     logger.error(f"Database error in {func.__name__} (non-retryable): {e}")
                     raise
-                except Exception as e:
+                except (ValueError, TypeError, IOError, RuntimeError) as e:
                     logger.error(f"Unexpected error in {func.__name__}: {type(e).__name__}: {e}")
                     raise
             
@@ -298,7 +298,7 @@ class DatabaseManager:
         except OSError as e:
             logger.error(f"OS error during database initialization (file/directory): {e}")
             raise DatabaseError(f"Database file system error: {e}")
-        except Exception as e:
+        except (IOError, RuntimeError, TypeError) as e:
             logger.error(f"Unexpected error during database initialization: {type(e).__name__}: {e}")
             raise DatabaseError(f"Database initialization failed: {e}")
     
@@ -355,7 +355,7 @@ class DatabaseManager:
                             f"⚠️ High pool utilization: {utilization:.1f}% "
                             f"(checked_out={checked_out}, max={max_connections})"
                         )
-        except Exception as e:
+        except (AttributeError, TypeError, ZeroDivisionError) as e:
             logger.debug(f"Error checking pool utilization: {e}")
     
     def get_pool_status(self) -> Dict:
@@ -489,7 +489,7 @@ class DatabaseManager:
         except SQLAlchemyError as e:
             logger.error(f"SQLAlchemy error configuring database: {e}")
             raise
-        except Exception as e:
+        except (ValueError, TypeError, IOError, RuntimeError) as e:
             logger.error(f"Unexpected error configuring database: {type(e).__name__}: {e}")
             raise
     
@@ -531,7 +531,7 @@ class DatabaseManager:
         except SQLAlchemyError as e:
             logger.error(f"SQLAlchemy error during database migration: {e}")
             raise DatabaseError(f"Migration failed: {e}")
-        except Exception as e:
+        except (IOError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Unexpected error during database migration: {type(e).__name__}: {e}")
             raise DatabaseError(f"Migration failed: {e}")
     
@@ -575,10 +575,10 @@ class DatabaseManager:
                             conn.execute(text("ALTER TABLE trades RENAME COLUMN user_id_new TO user_id"))
                             logger.info("✅ Migrated user_id to BIGINT")
                     conn.commit()
-                except Exception as e:
+                except (OperationalError, IntegrityError, SQLAlchemyError, ValueError) as e:
                     logger.debug(f"Column type migration info: {e}")
                 
-        except Exception as e:
+        except (OperationalError, IntegrityError, SQLAlchemyError) as e:
             logger.error(f"Error migrating trades table: {e}")
             raise
     
@@ -612,10 +612,10 @@ class DatabaseManager:
                             ALTER COLUMN user_id TYPE BIGINT
                         """))
                     conn.commit()
-                except Exception as e:
+                except (OperationalError, IntegrityError, SQLAlchemyError, ValueError) as e:
                     logger.debug(f"Column type migration info: {e}")
                 
-        except Exception as e:
+        except (OperationalError, IntegrityError, SQLAlchemyError) as e:
             logger.error(f"Error migrating signal_logs table: {e}")
             raise
     
@@ -645,7 +645,7 @@ class DatabaseManager:
                             ALTER COLUMN user_id TYPE BIGINT
                         """))
                     conn.commit()
-                except Exception as e:
+                except (OperationalError, IntegrityError, SQLAlchemyError, ValueError) as e:
                     logger.debug(f"Column type migration info: {e}")
             
             if 'original_sl' not in columns:
@@ -681,7 +681,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("✅ Added last_price_update column to positions table")
                 
-        except Exception as e:
+        except (OperationalError, IntegrityError, SQLAlchemyError) as e:
             logger.error(f"Error migrating positions table: {e}")
             raise
     
@@ -769,7 +769,7 @@ class DatabaseManager:
                     self.log_pool_status(level='error')
                     raise
                     
-            except Exception as e:
+            except (IOError, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Unexpected error creating database session: {type(e).__name__}: {e}")
                 self.log_pool_status(level='error')
                 raise DatabaseError(f"Failed to create session: {e}") from e
@@ -820,7 +820,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after pool timeout: {rollback_error}")
             logger.error(f"Pool timeout in safe_session: {e}")
             self.log_pool_status(level='error')
@@ -829,7 +829,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
             logger.error(f"Integrity error in safe_session: {e}")
             raise
@@ -837,7 +837,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after OperationalError: {rollback_error}")
             logger.error(f"Operational error in safe_session: {e}")
             raise
@@ -845,15 +845,15 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
             logger.error(f"SQLAlchemy error in safe_session: {e}")
             raise
-        except Exception as e:
+        except (ValueError, TypeError, IOError, RuntimeError) as e:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback: {rollback_error}")
             logger.error(f"Unexpected error in safe_session: {type(e).__name__}: {e}")
             raise
@@ -861,7 +861,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.close()
-                except Exception as close_error:
+                except (OperationalError, SQLAlchemyError) as close_error:
                     logger.error(f"Error closing session: {close_error}")
     
     @contextmanager
@@ -906,7 +906,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after pool timeout: {rollback_error}")
             logger.error(f"Transaction rolled back due to pool timeout: {e}")
             self.log_pool_status(level='error')
@@ -916,7 +916,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
             logger.error(f"Transaction rolled back due to integrity error: {e}")
             raise
@@ -925,7 +925,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after OperationalError: {rollback_error}")
             logger.error(f"Transaction rolled back due to operational error: {e}")
             raise
@@ -934,16 +934,16 @@ class DatabaseManager:
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
             logger.error(f"Transaction rolled back due to SQLAlchemy error: {e}")
             raise
-        except Exception as e:
+        except (ValueError, TypeError, IOError, RuntimeError) as e:
             transaction_exception = e
             if session:
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback: {rollback_error}")
             logger.error(f"Transaction rolled back: {type(e).__name__}: {e}")
             raise
@@ -951,7 +951,7 @@ class DatabaseManager:
             if session:
                 try:
                     session.close()
-                except Exception as close_error:
+                except (OperationalError, SQLAlchemyError) as close_error:
                     logger.error(f"Error closing session: {close_error}")
                     if transaction_exception is None:
                         raise
@@ -990,28 +990,28 @@ class DatabaseManager:
         except IntegrityError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
             logger.error(f"Integrity error creating trade atomically: {e}")
             raise
         except OperationalError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after OperationalError: {rollback_error}")
             logger.error(f"Operational error creating trade atomically: {e}")
             raise
         except SQLAlchemyError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
             logger.error(f"SQLAlchemy error creating trade atomically: {e}")
             raise
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback: {rollback_error}")
             logger.error(f"Unexpected error creating trade atomically: {type(e).__name__}: {e}")
             raise
@@ -1040,28 +1040,28 @@ class DatabaseManager:
         except IntegrityError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after IntegrityError: {rollback_error}")
             logger.error(f"Integrity error creating position atomically: {e}")
             raise
         except OperationalError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after OperationalError: {rollback_error}")
             logger.error(f"Operational error creating position atomically: {e}")
             raise
         except SQLAlchemyError as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback after SQLAlchemyError: {rollback_error}")
             logger.error(f"SQLAlchemy error creating position atomically: {e}")
             raise
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback: {rollback_error}")
             logger.error(f"Unexpected error creating position atomically: {type(e).__name__}: {e}")
             raise
@@ -1074,5 +1074,5 @@ class DatabaseManager:
             self.Session.remove()
             self.engine.dispose()
             logger.info("✅ Database connections closed successfully")
-        except Exception as e:
+        except (OperationalError, SQLAlchemyError, AttributeError) as e:
             logger.error(f"Error closing database: {type(e).__name__}: {e}")

@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Optional, Tuple, Set, Callable, Any, List
 import pytz
-from telegram.error import TimedOut
+from telegram.error import TimedOut, TelegramError, NetworkError, BadRequest, Forbidden, RetryAfter
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
 from bot.logger import setup_logger
 from bot.database import Position, Trade
 from bot.signal_session_manager import SignalSessionManager
@@ -99,7 +100,7 @@ def validate_position_data(user_id: int, trade_id: int, signal_type: str,
         
         return True, None
         
-    except Exception as e:
+    except (ValueError, TypeError, AttributeError) as e:
         return False, f"Validation error: {str(e)}"
 
 class PositionTracker:
@@ -167,7 +168,7 @@ class PositionTracker:
                 if elapsed > self.long_running_threshold:
                     logger.warning(f"⏱️ Task {effective_name} took {elapsed:.2f}s to complete (threshold: {self.long_running_threshold}s)")
                     self._slow_task_counts[effective_name] += 1
-        except Exception as cleanup_err:
+        except (KeyError, AttributeError, TypeError) as cleanup_err:
             logger.debug(f"Error during task cleanup: {cleanup_err}")
         
         try:
@@ -212,7 +213,7 @@ class PositionTracker:
                             f"Check logs for full traceback"
                         )
                     )
-                except Exception as alert_err:
+                except (RuntimeError, TypeError, ValueError) as alert_err:
                     logger.error(f"Failed to send task error alert: {alert_err}")
         else:
             try:
@@ -225,14 +226,14 @@ class PositionTracker:
                 logger.debug(f"Task {effective_name} was cancelled (detected via result())")
             except asyncio.InvalidStateError as e:
                 logger.debug(f"InvalidStateError getting result for {effective_name}: {e}")
-            except Exception as result_err:
+            except (ValueError, TypeError, RuntimeError) as result_err:
                 logger.error(f"Error getting result for {effective_name}: {result_err}")
         
         if task_name and task_name in self._task_callbacks:
             try:
                 callback = self._task_callbacks.pop(task_name)
                 callback(task)
-            except Exception as cb_err:
+            except (ValueError, TypeError, RuntimeError, AttributeError) as cb_err:
                 logger.error(f"Task callback error for {task_name}: {cb_err}")
         
         self._cleanup_task_state(effective_name)
@@ -254,7 +255,7 @@ class PositionTracker:
             
             if len(self._exception_history) > MAX_EXCEPTION_HISTORY:
                 self._exception_history = self._exception_history[-MAX_EXCEPTION_HISTORY:]
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             logger.debug(f"Error recording exception: {e}")
     
     def _cleanup_task_state(self, task_name: str) -> None:
@@ -322,7 +323,7 @@ class PositionTracker:
                             asyncio.create_task(
                                 self._resolve_session_state(resolve_session_user_id)
                             )
-                except Exception as e:
+                except (asyncio.CancelledError, asyncio.TimeoutError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Error resolving session state: {e}")
         
         task.add_done_callback(done_callback)
@@ -342,7 +343,7 @@ class PositionTracker:
                 if session and session.get('status') == 'monitoring':
                     logger.info(f"Resolving orphaned session state for user {user_id}")
                     await self.signal_session_manager.end_session(user_id, 'RESOLVED')
-        except Exception as e:
+        except (asyncio.CancelledError, asyncio.TimeoutError, KeyError, ValueError, AttributeError) as e:
             logger.error(f"Error resolving session state for user {user_id}: {e}")
     
     async def wait_for_completion(self, timeout: float = None, 
@@ -532,7 +533,7 @@ class PositionTracker:
                                                 f"Consider investigating this task for performance issues"
                                             )
                                         )
-                                    except Exception as e:
+                                    except (RuntimeError, TypeError, ValueError) as e:
                                         logger.error(f"Failed to send slow task alert: {e}")
                 
                 for task, task_name, age in tasks_to_cancel:
@@ -547,12 +548,12 @@ class PositionTracker:
                         except asyncio.CancelledError:
                             logger.info(f"✓ Task {task_name} auto-cancelled successfully")
                             
-                    except Exception as e:
+                    except (asyncio.CancelledError, asyncio.TimeoutError, RuntimeError) as e:
                         logger.error(f"Error auto-cancelling task {task_name}: {e}")
                         
         except asyncio.CancelledError:
             logger.info("Task timeout monitor cancelled")
-        except Exception as e:
+        except (RuntimeError, KeyError, ValueError, AttributeError) as e:
             logger.error(f"Error in task timeout monitor: {e}")
         finally:
             logger.info("Task timeout monitor stopped")
@@ -666,7 +667,7 @@ class PositionTracker:
                 try:
                     task.cancel()
                     logger.debug(f"  Cancellation requested for: {task_name}")
-                except Exception as e:
+                except (asyncio.InvalidStateError, RuntimeError, AttributeError) as e:
                     logger.warning(f"  ⚠️ Failed to request cancellation for {task_name}: {e}")
                     uncancellable_tasks.append(task_name)
                     cancellation_results[task_name] = f"cancel_request_failed: {e}"
@@ -702,7 +703,7 @@ class PositionTracker:
                             except asyncio.InvalidStateError:
                                 cancellation_results[task_name] = "invalid_state"
                                 logger.debug(f"  ? {task_name}: invalid state")
-                    except Exception as e:
+                    except (asyncio.CancelledError, asyncio.InvalidStateError, RuntimeError) as e:
                         cancellation_results[task_name] = f"check_failed: {e}"
                         logger.error(f"  ❌ Error checking {task_name} status: {e}")
                 
@@ -731,13 +732,13 @@ class PositionTracker:
                             except asyncio.CancelledError:
                                 cancellation_results[task_name] = "force_cancelled"
                                 logger.info(f"  ✓ {task_name}: force cancelled")
-                            except Exception as e:
+                            except (RuntimeError, AttributeError) as e:
                                 cancellation_results[task_name] = f"force_error: {e}"
                                 logger.error(f"  ❌ {task_name}: error during force cancel: {e}")
                 else:
                     logger.info(f"✅ All {len(done)} tasks completed cancellation gracefully")
                     
-            except Exception as e:
+            except (asyncio.CancelledError, asyncio.TimeoutError, RuntimeError) as e:
                 logger.error(f"❌ Error during task cancellation phase: {e}")
         
         self._pending_tasks.clear()
@@ -794,12 +795,12 @@ class PositionTracker:
                             ),
                             name=f"slippage_alert_{user_id}_{position_id}"
                         )
-                    except Exception as e:
+                    except (asyncio.TimeoutError, RuntimeError, ValueError) as e:
                         logger.error(f"Failed to send slippage alert: {e}")
             else:
                 logger.debug(f"Slippage within threshold on {operation}: {slippage_pips:.1f} pips")
                 
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError, ZeroDivisionError) as e:
             logger.error(f"Error checking slippage: {e}")
     
     def _normalize_position_dict(self, pos: Dict) -> Dict:
@@ -882,17 +883,17 @@ class PositionTracker:
             
             return position_id
             
-        except Exception as e:
+        except (IntegrityError, OperationalError, SQLAlchemyError, ValueError, TypeError) as e:
             logger.error(f"Database error adding position for User:{user_id} Trade:{trade_id}: {type(e).__name__}: {e}", exc_info=True)
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback: {rollback_error}")
             return None
         finally:
             try:
                 session.close()
-            except Exception as close_error:
+            except (OperationalError, SQLAlchemyError) as close_error:
                 logger.error(f"Error closing session: {close_error}")
     
     async def _apply_dynamic_sl_internal(self, user_id: int, position_id: int, pos: Dict, 
@@ -953,7 +954,7 @@ class PositionTracker:
                         )
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending dynamic SL notification to user {user_id}")
-                    except Exception as e:
+                    except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
                         logger.error(f"Failed to send dynamic SL notification: {e}")
         else:
             new_stop_loss = entry_price + new_sl_distance
@@ -979,7 +980,7 @@ class PositionTracker:
                         )
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending dynamic SL notification to user {user_id}")
-                    except Exception as e:
+                    except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
                         logger.error(f"Failed to send dynamic SL notification: {e}")
         
         return sl_adjusted, new_stop_loss if sl_adjusted else None, pos
@@ -1067,7 +1068,7 @@ class PositionTracker:
                         )
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending trailing stop notification to user {user_id}")
-                    except Exception as e:
+                    except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
                         logger.error(f"Failed to send trailing stop notification: {e}")
         else:
             new_trailing_sl = current_price + trailing_distance
@@ -1094,7 +1095,7 @@ class PositionTracker:
                         )
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending trailing stop notification to user {user_id}")
-                    except Exception as e:
+                    except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
                         logger.error(f"Failed to send trailing stop notification: {e}")
         
         return sl_adjusted, new_trailing_sl if sl_adjusted else None, pos
@@ -1165,7 +1166,7 @@ class PositionTracker:
                 if dynamic_sl_applied:
                     sl_adjusted = True
                     stop_loss = new_sl
-            except Exception as e:
+            except (asyncio.TimeoutError, asyncio.CancelledError, KeyError, ValueError, AttributeError) as e:
                 logger.error(f"Error applying dynamic SL for position {position_id}: {e}")
             
             if not dynamic_sl_applied:
@@ -1174,7 +1175,7 @@ class PositionTracker:
                     if trailing_applied:
                         sl_adjusted = True
                         stop_loss = new_sl
-                except Exception as e:
+                except (asyncio.TimeoutError, asyncio.CancelledError, KeyError, ValueError, AttributeError) as e:
                     logger.error(f"Error applying trailing stop for position {position_id}: {e}")
             
             async with self._position_lock:
@@ -1204,16 +1205,16 @@ class PositionTracker:
                     position.sl_adjustment_count = sl_adjustment_count
                 
                 session.commit()
-            except Exception as e:
+            except (IntegrityError, OperationalError, SQLAlchemyError, ValueError, TypeError) as e:
                 logger.error(f"Database error updating position {position_id}: {type(e).__name__}: {e}", exc_info=True)
                 try:
                     session.rollback()
-                except Exception as rollback_error:
+                except (OperationalError, SQLAlchemyError) as rollback_error:
                     logger.error(f"Error during rollback: {rollback_error}")
             finally:
                 try:
                     session.close()
-                except Exception as close_error:
+                except (OperationalError, SQLAlchemyError) as close_error:
                     logger.error(f"Error closing session: {close_error}")
             
             hit_tp = False
@@ -1226,7 +1227,7 @@ class PositionTracker:
                 else:
                     hit_tp = current_price <= take_profit
                     hit_sl = current_price >= stop_loss
-            except Exception as e:
+            except (ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error checking TP/SL conditions: {e}")
                 return None
             
@@ -1240,7 +1241,7 @@ class PositionTracker:
             
             return None
             
-        except Exception as e:
+        except (asyncio.CancelledError, asyncio.TimeoutError, KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error(f"Critical error updating position {position_id} for User:{user_id}: {type(e).__name__}: {e}", exc_info=True)
             return None
     
@@ -1355,7 +1356,7 @@ class PositionTracker:
                                     timeout=5.0
                                 )
                                 logger.info(f"Fallback notification sent to user {user_id}")
-                            except Exception as fallback_error:
+                            except (asyncio.TimeoutError, RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as fallback_error:
                                 logger.error(f"Fallback notification also failed: {fallback_error}")
                         except TimedOut as telegram_err:
                             logger.error(f"Failed to send exit notification to user {user_id}: telegram.error.TimedOut")
@@ -1368,9 +1369,9 @@ class PositionTracker:
                                     timeout=5.0
                                 )
                                 logger.info(f"Fallback notification sent to user {user_id}")
-                            except Exception as fallback_error:
+                            except (asyncio.TimeoutError, RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as fallback_error:
                                 logger.error(f"Fallback notification also failed: {fallback_error}")
-                        except Exception as telegram_err:
+                        except (RetryAfter, BadRequest, Forbidden, NetworkError, TelegramError) as telegram_err:
                             logger.error(f"Failed to send exit notification to user {user_id}: {telegram_err}")
                     else:
                         logger.warning(f"Not enough candles for exit chart: {len(df_m1) if df_m1 else 0}")
@@ -1382,7 +1383,7 @@ class PositionTracker:
                                 'exit_price': exit_price,
                                 'actual_pl': actual_pl
                             }, trade_result)
-                except Exception as e:
+                except (asyncio.TimeoutError, asyncio.CancelledError, RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError, FileNotFoundError, IOError, OSError, ValueError, TypeError) as e:
                     logger.error(f"Error sending exit chart: {e}")
                     
                     if self.alert_system and trade_result:
@@ -1406,16 +1407,16 @@ class PositionTracker:
             if self.signal_session_manager:
                 await self.signal_session_manager.end_session(user_id, reason)
             
-        except Exception as e:
+        except (IntegrityError, OperationalError, SQLAlchemyError, asyncio.CancelledError, asyncio.TimeoutError, ValueError, TypeError, KeyError) as e:
             logger.error(f"Error closing position {position_id}: {e}", exc_info=True)
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback: {rollback_error}")
         finally:
             try:
                 session.close()
-            except Exception as close_error:
+            except (OperationalError, SQLAlchemyError) as close_error:
                 logger.error(f"Error closing session: {close_error}")
     
     async def monitor_active_positions(self):
@@ -1473,7 +1474,7 @@ class PositionTracker:
                             logger.info(f"Position {position_id} User:{user_id} closed: {result} at ${current_price:.2f}")
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout updating position {position_id} for user {user_id}")
-                    except Exception as e:
+                    except (asyncio.CancelledError, ValueError, TypeError, KeyError, AttributeError) as e:
                         logger.error(f"Error monitoring position {position_id} for user {user_id}: {e}")
             
             return updated_positions
@@ -1481,7 +1482,7 @@ class PositionTracker:
         except asyncio.TimeoutError:
             logger.error("Timeout getting current price for position monitoring")
             return []
-        except Exception as e:
+        except (asyncio.CancelledError, ConnectionError, ValueError, TypeError, KeyError, AttributeError) as e:
             logger.error(f"Error in monitor_active_positions: {e}")
             return []
     
@@ -1533,13 +1534,13 @@ class PositionTracker:
                                     logger.info(f"Position {position_id} User:{user_id} closed: {result}")
                             except asyncio.TimeoutError:
                                 logger.error(f"Timeout updating position {position_id}")
-                            except Exception as e:
+                            except (asyncio.CancelledError, ValueError, TypeError, KeyError, AttributeError) as e:
                                 logger.error(f"Error updating position {position_id}: {e}")
                     
                 except asyncio.CancelledError:
                     logger.info("Position monitoring cancelled")
                     break
-                except Exception as e:
+                except (ConnectionError, ValueError, TypeError, KeyError, AttributeError) as e:
                     logger.error(f"Error processing tick dalam position monitoring: {e}")
                     if self.monitoring and not self._shutdown_event.is_set():
                         await asyncio.sleep(1)
@@ -1547,7 +1548,7 @@ class PositionTracker:
         finally:
             try:
                 await market_data_client.unsubscribe_ticks('position_tracker')
-            except Exception as e:
+            except (asyncio.CancelledError, asyncio.TimeoutError, ConnectionError, ValueError, TypeError) as e:
                 logger.error(f"Error unsubscribing from ticks: {e}")
             logger.info("Position tracker monitoring stopped")
     
@@ -1672,14 +1673,14 @@ class PositionTracker:
             total_positions = sum(len(positions) for positions in self.active_positions.values())
             logger.info(f"Reloaded {total_positions} active positions from database")
             
-        except Exception as e:
+        except (IntegrityError, OperationalError, SQLAlchemyError, ValueError, TypeError) as e:
             logger.error(f"Error reloading active positions: {e}", exc_info=True)
             try:
                 session.rollback()
-            except Exception as rollback_error:
+            except (OperationalError, SQLAlchemyError) as rollback_error:
                 logger.error(f"Error during rollback: {rollback_error}")
         finally:
             try:
                 session.close()
-            except Exception as close_error:
+            except (OperationalError, SQLAlchemyError) as close_error:
                 logger.error(f"Error closing session: {close_error}")

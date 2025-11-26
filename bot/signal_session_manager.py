@@ -125,6 +125,12 @@ class SignalSessionManager:
                             f"🚫 Sinyal ditolak (cooldown) - User:{user_id} Tipe:{signal_type} "
                             f"Sisa:{remaining:.0f}s dari {cooldown}s"
                         )
+                        if signal_type and current_price is not None:
+                            self._update_last_signal_info(user_id, signal_type, current_price)
+                            logger.info(
+                                f"📝 Signal tracking diperbarui (ditolak): {signal_type} @ ${current_price:.2f} | "
+                                f"Alasan: Cooldown sesi aktif"
+                            )
                         return False, reason
             
             if last_info and signal_type and current_price is not None:
@@ -146,6 +152,11 @@ class SignalSessionManager:
                             logger.info(
                                 f"🚫 Sinyal ditolak (pergerakan harga minimal) - User:{user_id} "
                                 f"Tipe:{signal_type} Pergerakan:{price_movement:.2f} < Min:{min_movement:.2f}"
+                            )
+                            self._update_last_signal_info(user_id, signal_type, current_price)
+                            logger.info(
+                                f"📝 Signal tracking diperbarui (ditolak): {signal_type} @ ${current_price:.2f} | "
+                                f"Alasan: Pergerakan harga minimal tidak tercapai"
                             )
                             return False, reason
         

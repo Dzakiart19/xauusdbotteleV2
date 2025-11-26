@@ -1488,16 +1488,22 @@ class TradingStrategy:
             if signal_source == 'auto':
                 if mc_result['all_mandatory_passed']:
                     signal = mc_result['signal_type']
+                    close_price = safe_float(close, 0.0)
+                    
+                    self._update_signal_tracking(candle_timestamp, signal, close_price)
                     
                     candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
                     if candle_close_only and signal:
-                        close_price = safe_float(close, 0.0)
                         can_generate, skip_reason = self.should_generate_signal(
                             candle_timestamp, close_price, signal
                         )
                         if not can_generate:
                             logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif: {skip_reason}")
                             logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
+                            logger.info(
+                                f"📝 Signal tracking diperbarui (ditolak): {signal} @ ${close_price:.2f} | "
+                                f"Alasan: {skip_reason}"
+                            )
                             return None
                         else:
                             logger.info(f"🕯️ Candle close check PASSED: Signal diizinkan untuk candle baru")
@@ -1579,16 +1585,22 @@ class TradingStrategy:
                 
                 if trend_passed and adjusted_score >= manual_threshold:
                     signal = mc_result['signal_type']
+                    close_price = safe_float(close, 0.0)
+                    
+                    self._update_signal_tracking(candle_timestamp, signal, close_price)
                     
                     candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
                     if candle_close_only and signal:
-                        close_price = safe_float(close, 0.0)
                         can_generate, skip_reason = self.should_generate_signal(
                             candle_timestamp, close_price, signal
                         )
                         if not can_generate:
                             logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif (manual): {skip_reason}")
                             logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
+                            logger.info(
+                                f"📝 Signal tracking diperbarui (ditolak): {signal} @ ${close_price:.2f} | "
+                                f"Alasan: {skip_reason}"
+                            )
                             return None
                         else:
                             logger.info(f"🕯️ Candle close check PASSED (manual): Signal diizinkan")
@@ -1632,6 +1644,11 @@ class TradingStrategy:
                 min_trend_strength = 0.20
                 if signal_source == 'auto' and trend_strength < min_trend_strength:
                     logger.info(f"Auto signal rejected - trend strength too weak: {trend_strength:.2f} < {min_trend_strength} ({trend_desc})")
+                    close_price = safe_float(close, 0.0)
+                    logger.info(
+                        f"📝 Signal tracking diperbarui (ditolak): {signal} @ ${close_price:.2f} | "
+                        f"Alasan: Trend strength terlalu lemah ({trend_strength:.2f} < {min_trend_strength})"
+                    )
                     return None
                 
                 try:
@@ -1733,8 +1750,6 @@ class TradingStrategy:
                 logger.info(f"Trend Strength: {trend_desc} (score: {trend_strength:.2f})")
                 logger.info(f"Dynamic TP Ratio: {dynamic_tp_ratio:.2f}x (Expected profit: ${expected_profit:.2f})")
                 logger.info(f"Risk: ${expected_loss:.2f} | Reward: ${expected_profit:.2f} | R:R = 1:{dynamic_tp_ratio:.2f}")
-                
-                self._update_signal_tracking(candle_timestamp, signal, float(close_val))
                 
                 def safe_indicator_float(val, default=None):
                     """Convert indicator value to float safely for JSON serialization"""

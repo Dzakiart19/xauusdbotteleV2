@@ -294,10 +294,14 @@ class TradingBot:
         return user_id in self.config.AUTHORIZED_USER_IDS
     
     def is_admin(self, user_id: int) -> bool:
+        # Check AUTHORIZED_USER_IDS dulu (dari secrets)
+        if user_id in self.config.AUTHORIZED_USER_IDS:
+            return True
+        # Kalau tidak, check database kalau user_manager ada
         if self.user_manager:
             user = self.user_manager.get_user(user_id)
             return user.is_admin if user else False
-        return user_id in self.config.AUTHORIZED_USER_IDS
+        return False
     
     def _generate_signal_hash(self, user_id: int, signal_type: str, entry_price: float) -> str:
         price_bucket = round(entry_price / (self.signal_price_tolerance_pips / self.config.XAUUSD_PIP_VALUE))

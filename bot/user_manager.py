@@ -248,6 +248,10 @@ class UserManager:
     
     def is_admin(self, telegram_id: int) -> bool:
         """Check if user is admin (READ operation - no lock needed)."""
+        # Check AUTHORIZED_USER_IDS dulu (dari secrets)
+        if telegram_id in self.config.AUTHORIZED_USER_IDS:
+            return True
+        # Kalau tidak, check database
         user = self.get_user(telegram_id)
         return bool(user.is_admin) if user else False
     

@@ -110,6 +110,20 @@ class SignalSessionManager:
             active_session = self.active_sessions.get(user_id)
             last_info = self._last_signal_info.get(user_id)
             
+            if active_session and not Config.AUTO_SIGNAL_REPLACEMENT_ALLOWED:
+                elapsed = (datetime.now(pytz.UTC) - active_session.started_at).total_seconds()
+                reason = (
+                    f"Sudah ada posisi aktif ({active_session.signal_type}). "
+                    f"Tutup posisi terlebih dahulu sebelum membuat sinyal baru. "
+                    f"Posisi aktif sudah berjalan {elapsed:.0f} detik."
+                )
+                logger.info(
+                    f"🚫 Sinyal ditolak (posisi aktif) - User:{user_id} "
+                    f"Posisi aktif:{active_session.signal_type} Berjalan:{elapsed:.0f}s | "
+                    f"AUTO_SIGNAL_REPLACEMENT_ALLOWED=false"
+                )
+                return False, reason
+            
             if active_session and signal_type:
                 if active_session.signal_type == signal_type:
                     elapsed = (datetime.now(pytz.UTC) - active_session.started_at).total_seconds()
@@ -174,25 +188,21 @@ class SignalSessionManager:
         async with self._session_lock:
             if user_id in self.active_sessions:
                 old_session = self.active_sessions[user_id]
+                elapsed = (datetime.now(pytz.UTC) - old_session.started_at).total_seconds()
                 
-                if old_session.signal_type == signal_type:
-                    if not Config.AUTO_SIGNAL_REPLACEMENT_ALLOWED:
-                        elapsed = (datetime.now(pytz.UTC) - old_session.started_at).total_seconds()
-                        logger.warning(
-                            f"⛔ Sesi TIDAK di-overwrite - User:{user_id} "
-                            f"Tipe sinyal sama ({signal_type}) dan AUTO_SIGNAL_REPLACEMENT_ALLOWED=false. "
-                            f"Sesi aktif sudah berjalan {elapsed:.1f}s"
-                        )
-                        return None
-                    else:
-                        logger.info(
-                            f"🔄 Sesi akan di-overwrite (diizinkan) - User:{user_id} "
-                            f"Tipe:{signal_type} AUTO_SIGNAL_REPLACEMENT_ALLOWED=true"
-                        )
+                if not Config.AUTO_SIGNAL_REPLACEMENT_ALLOWED:
+                    logger.warning(
+                        f"⛔ Sesi TIDAK di-overwrite - User:{user_id} "
+                        f"Posisi aktif:{old_session.signal_type} -> Baru:{signal_type} | "
+                        f"AUTO_SIGNAL_REPLACEMENT_ALLOWED=false. "
+                        f"Sesi aktif sudah berjalan {elapsed:.1f}s"
+                    )
+                    return None
                 else:
                     logger.info(
-                        f"🔄 Sesi akan di-overwrite (tipe berbeda) - User:{user_id} "
-                        f"Lama:{old_session.signal_type} -> Baru:{signal_type}"
+                        f"🔄 Sesi akan di-overwrite (diizinkan) - User:{user_id} "
+                        f"Lama:{old_session.signal_type} -> Baru:{signal_type} | "
+                        f"AUTO_SIGNAL_REPLACEMENT_ALLOWED=true | Durasi sebelumnya:{elapsed:.1f}s"
                     )
             
             session = SignalSession(

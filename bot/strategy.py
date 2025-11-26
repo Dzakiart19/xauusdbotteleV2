@@ -1646,17 +1646,27 @@ class TradingStrategy:
                     return None
                 
                 try:
-                    dynamic_tp_ratio = 1.45 + (trend_strength * 1.05)
+                    base_tp_ratio = 1.5
+                    tp_adjustment = trend_strength * 0.3
+                    dynamic_tp_ratio = base_tp_ratio + tp_adjustment
                     
                     if not is_valid_number(dynamic_tp_ratio):
-                        logger.warning(f"NaN/Inf in dynamic_tp_ratio: {dynamic_tp_ratio}, using default 1.5")
-                        dynamic_tp_ratio = 1.5
+                        logger.warning(f"NaN/Inf in dynamic_tp_ratio: {dynamic_tp_ratio}, using default {base_tp_ratio}")
+                        dynamic_tp_ratio = base_tp_ratio
                     
-                    dynamic_tp_ratio = float(min(max(dynamic_tp_ratio, 1.45), 2.50))
+                    min_tp_ratio = 1.3
+                    max_tp_ratio = 2.0
+                    dynamic_tp_ratio = float(min(max(dynamic_tp_ratio, min_tp_ratio), max_tp_ratio))
+                    
+                    logger.debug(
+                        f"📊 Dynamic TP Calculation: base={base_tp_ratio}, "
+                        f"trend_strength={trend_strength:.3f}, adjustment={tp_adjustment:.3f}, "
+                        f"final_ratio={dynamic_tp_ratio:.3f} (range: {min_tp_ratio}-{max_tp_ratio})"
+                    )
                     
                     if not (1.0 <= dynamic_tp_ratio <= 3.0):
-                        logger.warning(f"Invalid TP ratio: {dynamic_tp_ratio}, using default 1.5")
-                        dynamic_tp_ratio = 1.5
+                        logger.warning(f"Invalid TP ratio: {dynamic_tp_ratio}, using default {base_tp_ratio}")
+                        dynamic_tp_ratio = base_tp_ratio
                     
                     atr_raw = indicators.get('atr', 1.0)
                     atr = safe_float(atr_raw, 1.0, "signal_atr")

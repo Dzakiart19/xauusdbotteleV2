@@ -1627,20 +1627,75 @@ class PositionTracker:
         return {uid: pos.copy() for uid, pos in self.active_positions.items()}
     
     async def has_active_position_async(self, user_id: int) -> bool:
-        """Thread-safe check for active position (async version)"""
+        """Thread-safe check for active position with multi-source verification including DB fallback"""
+        # Check 1: SignalSessionManager
         if self.signal_session_manager:
-            return self.signal_session_manager.has_active_session(user_id)
+            if self.signal_session_manager.has_active_session(user_id):
+                return True
+        
+        # Check 2: In-memory cache (with lock)
         async with self._position_lock:
-            return user_id in self.active_positions and len(self.active_positions[user_id]) > 0
+            if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
+                return True
+        
+        # Check 3: Database fallback (critical for restart scenarios)
+        db_has_active = await self.verify_active_position_in_db(user_id)
+        if db_has_active:
+            logger.debug(f"Active position found in DB for user {user_id} (not in cache/session)")
+            return True
+        
+        return False
     
     def has_active_position(self, user_id: int) -> bool:
-        """Check if user has active position (sync version)
+        """Check if user has active position with multi-source verification including DB fallback
         
-        Note: For thread-safe access in async context, use has_active_position_async
+        Checks multiple sources for redundancy:
+        1. SignalSessionManager (if available)
+        2. In-memory active_positions cache
+        3. Database fallback (critical for restart scenarios)
         """
+        # Check 1: SignalSessionManager
         if self.signal_session_manager:
-            return self.signal_session_manager.has_active_session(user_id)
-        return user_id in self.active_positions and len(self.active_positions[user_id]) > 0
+            if self.signal_session_manager.has_active_session(user_id):
+                return True
+        
+        # Check 2: In-memory cache
+        if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
+            return True
+        
+        # Check 3: Database fallback (critical for restart scenarios)
+        # Menggunakan synchronous query karena ini method sync
+        try:
+            session = self.db.get_session()
+            try:
+                active_count = session.query(Position).filter(
+                    Position.user_id == user_id,
+                    Position.status == 'ACTIVE'
+                ).count()
+                if active_count > 0:
+                    logger.debug(f"Active position found in DB for user {user_id} (not in cache/session)")
+                    return True
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Error checking DB for active position: {e}")
+        
+        return False
+    
+    async def verify_active_position_in_db(self, user_id: int) -> bool:
+        """Verify active position exists in database (for critical operations)"""
+        session = self.db.get_session()
+        try:
+            active_count = session.query(Position).filter(
+                Position.user_id == user_id,
+                Position.status == 'ACTIVE'
+            ).count()
+            return active_count > 0
+        except Exception as e:
+            logger.error(f"Error verifying position in DB: {e}")
+            return False
+        finally:
+            session.close()
     
     async def reload_active_positions(self):
         """Reload active positions from the database

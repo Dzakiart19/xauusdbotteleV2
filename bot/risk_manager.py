@@ -388,3 +388,40 @@ class RiskManager:
         except (RiskManagerError, Exception) as e:
             logger.error(f"Error calculating P/L: {e}")
             return 0.0
+    
+    def calculate_risk_percentage(self, entry_price: float, stop_loss: float, 
+                                  signal_type: str, lot_size: Optional[float] = None) -> float:
+        """Calculate risk percentage based on account balance and SL distance
+        
+        Risk % = (SL_pips * lot_size * pip_value) / account_balance * 100
+        """
+        try:
+            if lot_size is None or lot_size <= 0:
+                lot_size = self.config.LOT_SIZE
+            
+            sl_distance = abs(entry_price - stop_loss)
+            sl_pips = sl_distance * self.config.XAUUSD_PIP_VALUE
+            
+            if sl_pips <= 0:
+                return 0.0
+            
+            pip_value_per_lot = 10.0
+            risk_amount = sl_pips * lot_size * pip_value_per_lot
+            
+            account_balance = self.config.ACCOUNT_BALANCE
+            if account_balance <= 0:
+                return 0.0
+            
+            risk_percent = (risk_amount / account_balance) * 100
+            
+            risk_percent = max(0.0, min(risk_percent, 100.0))
+            
+            logger.debug(f"Risk calc: SL={sl_pips:.1f} pips, Lot={lot_size:.2f}, "
+                        f"Risk=${risk_amount:.2f}, Balance=${account_balance:.2f}, "
+                        f"Risk%={risk_percent:.2f}%")
+            
+            return round(risk_percent, 2)
+            
+        except Exception as e:
+            logger.error(f"Error calculating risk percentage: {e}")
+            return 0.0

@@ -64,6 +64,16 @@ The bot's architecture is modular, designed for scalability and maintainability.
 
 ## Recent Changes (26 November 2025)
 
+**Perbaikan LSP Type Safety - Session 3 (ZERO LSP Errors):**
+- **bot/market_data.py:** Diperbaiki line 262 - ditambahkan `hasattr(nan_mask, 'sum')` guard untuk kompatibilitas type dengan pandas Series
+- **bot/task_scheduler.py:** Diperbaiki line 480 - mengubah `Dict[str, BaseException]` menjadi `Dict[str, Exception]` untuk konsistensi type
+- **bot/telegram_bot.py:** Diperbaiki 114 LSP errors:
+  - Ditambahkan null checks untuk `update.effective_user` dan `update.message` di 13 command handlers
+  - Ditambahkan null checks untuk `self.app.bot` dan `self.app.updater` sebelum mengakses
+  - Diperbaiki Optional parameter types: `user_id: Optional[int]`, `signal_type: Optional[str]`, `caption: Optional[str]`
+  - Dihapus unreachable except clauses (BadRequest sebelum NetworkError, OSError subclasses)
+  - Ditambahkan inisialisasi `parsed_data: Any = None` untuk menghindari possibly unbound error
+
 **Perbaikan Exception Handlers & Type Safety - Session 2:**
 - **main.py:** Ditambahkan import `ConfigError` dari config.py (sebelumnya tidak di-import tapi digunakan)
 - **main.py:** Diperbaiki 21 malformed exception handlers dari `except (Exception,):` menjadi `except Exception:`
@@ -73,7 +83,7 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **config.py:** Diperbaiki 2 malformed exception handlers dari `except (Exception,):` menjadi `except Exception:`
 - **bot/market_data.py:** Diperbaiki 3 bare `except:` statements menjadi `except Exception:` di lines 1664, 1780, 1860
 
-**LSP Type Safety Improvements - ZERO Errors (Session 1):**
+**LSP Type Safety Improvements - Session 1:**
 - **bot/alert_system.py:** Fixed deque vs list type compatibility, migrated to public accessors for RateLimiter state persistence
 - **bot/analytics.py:** Fixed 37 SQLAlchemy Column type errors using cast() pattern for proper Python type conversion
 - **bot/user_manager.py:** Migrated to SQLAlchemy 2.0 Mapped annotations pattern, fixed return type safety
@@ -87,3 +97,5 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - Dynamic attributes: Use `setattr()` for wrapped function attribute assignment
 - Complex functions: Use `# pyright: ignore[reportGeneralTypeIssues]` for intentionally complex trading logic
 - Exception handlers: Always use `except Exception:` (not `except (Exception,):`)
+- Null safety: Add early return guards for Optional types (Update.effective_user, Update.message, self.app)
+- Parameter Optional types: Use `Optional[type] = None` for optional parameters with None default

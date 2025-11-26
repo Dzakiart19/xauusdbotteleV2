@@ -95,30 +95,49 @@ VALUE: 123456789
 **WEBHOOK MODE (Recommended untuk Koyeb):**
 ```
 TELEGRAM_WEBHOOK_MODE=true
-WEBHOOK_URL=https://<your-koyeb-domain>/bot<TELEGRAM_BOT_TOKEN>
+WEBHOOK_URL=https://<your-koyeb-domain>/webhook
+```
+
+**Contoh:**
+```
+TELEGRAM_WEBHOOK_MODE=true
+WEBHOOK_URL=https://united-zorana-dzeckyete-7e3e7caa.koyeb.app/webhook
 ```
 
 **Catatan Webhook:**
 - ✅ Webhook mode lebih efisien dan reliable untuk deployment cloud
-- ✅ Bot akan auto-detect Koyeb domain jika `WEBHOOK_URL` tidak diset
+- ✅ Format WEBHOOK_URL harus berakhir dengan `/webhook` (PENTING!)
 - ✅ Pastikan `TELEGRAM_WEBHOOK_MODE=true` untuk enable webhook
 - ✅ Server otomatis listen ke PORT dari environment Koyeb
 - ✅ Healthcheck endpoint: `/health` (port 8080)
-- ✅ Webhook endpoint: `/bot<token>` (auto-registered)
+- ✅ Webhook endpoint: `/webhook` (auto-registered)
 
-**Optional (sudah ada default yang bagus):**
+**Trading Hours (Optional):**
+```
+TRADING_HOURS_START=0          # Jam mulai trading (0 = tengah malam)
+TRADING_HOURS_END=23           # Jam akhir trading (23 = 23:59 - HARUS 0-23, bukan 24!)
+FRIDAY_CUTOFF_HOUR=20          # Stop trading Jumat jam 20:00+
+```
+
+**Unlimited Mode (Optional - untuk unlimited signals):**
+```
+SIGNAL_COOLDOWN_SECONDS=0      # Tidak ada cooldown antar sinyal
+MAX_TRADES_PER_DAY=0           # Unlimited jumlah trades per hari
+DAILY_LOSS_PERCENT=0.0         # Unlimited, tidak ada batas kerugian harian
+```
+**Catatan:** Time filter (weekday/weekend/trading hours) tetap aktif untuk keamanan!
+
+**Indicators & Risk (Optional - sudah ada default yang bagus):**
 ```
 EMA_PERIODS=5,10,20
 RSI_PERIOD=14
 STOCH_K_PERIOD=14
 ATR_PERIOD=14
-SIGNAL_COOLDOWN_SECONDS=30
-MAX_SPREAD_PIPS=10.0
-SL_ATR_MULTIPLIER=1.0
+MAX_SPREAD_PIPS=15.0
+SL_ATR_MULTIPLIER=1.2
 TP_RR_RATIO=1.5
 DEFAULT_SL_PIPS=20.0
 DEFAULT_TP_PIPS=30.0
-DAILY_LOSS_PERCENT=3.0
 FIXED_RISK_AMOUNT=1.0
 ```
 
@@ -146,6 +165,20 @@ FIXED_RISK_AMOUNT=1.0
 1. Klik **"Deploy"**
 2. Tunggu 2-5 menit untuk build & deploy
 3. Status akan berubah jadi **"Healthy"** kalau berhasil
+
+## ⚠️ CATATAN PENTING: TRADING_HOURS_END
+
+**JANGAN GUNAKAN NILAI 24!**
+- ❌ `TRADING_HOURS_END=24` → ERROR! (hanya accept 0-23)
+- ✅ `TRADING_HOURS_END=23` → BENAR (hampir 24/7, sampai 23:59)
+
+Config hanya accept jam 0-23. Untuk trading 24/7, gunakan:
+```
+TRADING_HOURS_START=0
+TRADING_HOURS_END=23
+```
+
+---
 
 ## ✅ Verifikasi Deployment
 

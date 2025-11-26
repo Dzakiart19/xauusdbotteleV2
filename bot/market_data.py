@@ -9,7 +9,7 @@ from enum import Enum
 import pandas as pd
 import pytz
 import random
-from typing import Optional, Dict, List, Tuple, Any, Union
+from typing import Optional, Dict, List, Tuple, Any, Union, Callable
 from bot.logger import setup_logger
 from bot.resilience import CircuitBreaker
 
@@ -105,7 +105,9 @@ class OHLCBuilder:
         self.candles = deque(maxlen=500)
         self.tick_count = 0
         self.nan_scrub_count = 0
-        logger.debug(f"OHLCBuilder initialized for M{timeframe_minutes}")
+        self.last_completed_candle_timestamp: Optional[datetime] = None
+        self.candle_close_callbacks: List[Callable] = []
+        logger.debug(f"OHLCBuilder diinisialisasi untuk M{timeframe_minutes}")
     
     def _scrub_nan_prices(self, prices: Dict) -> Tuple[bool, Dict]:
         """Scrub NaN values from price dictionary at builder boundary
@@ -202,9 +204,18 @@ class OHLCBuilder:
                     is_valid_candle, scrubbed_candle = self._scrub_nan_prices(self.current_candle)
                     if is_valid_candle:
                         self.candles.append(scrubbed_candle.copy())
-                        logger.debug(f"M{self.timeframe_minutes} candle completed: O={scrubbed_candle['open']:.2f} H={scrubbed_candle['high']:.2f} L={scrubbed_candle['low']:.2f} C={scrubbed_candle['close']:.2f} V={scrubbed_candle['volume']}")
+                        logger.debug(f"M{self.timeframe_minutes} candle selesai: O={scrubbed_candle['open']:.2f} H={scrubbed_candle['high']:.2f} L={scrubbed_candle['low']:.2f} C={scrubbed_candle['close']:.2f} V={scrubbed_candle['volume']}")
+                        
+                        self.last_completed_candle_timestamp = scrubbed_candle['timestamp']
+                        logger.info(f"🕯️ Candle M{self.timeframe_minutes} ditutup pada {self.last_completed_candle_timestamp}")
+                        
+                        for callback in self.candle_close_callbacks:
+                            try:
+                                callback(scrubbed_candle.copy(), self.timeframe_minutes)
+                            except Exception as cb_error:
+                                logger.error(f"Error saat memanggil callback candle close: {cb_error}")
                     else:
-                        logger.warning(f"Discarding invalid M{self.timeframe_minutes} candle due to NaN values")
+                        logger.warning(f"Membuang candle M{self.timeframe_minutes} tidak valid karena nilai NaN")
                 
                 self.current_candle = {
                     'timestamp': candle_start,
@@ -282,7 +293,28 @@ class OHLCBuilder:
         self.candles.clear()
         self.current_candle = None
         self.tick_count = 0
-        logger.debug(f"OHLCBuilder M{self.timeframe_minutes} cleared")
+        self.last_completed_candle_timestamp = None
+        logger.debug(f"OHLCBuilder M{self.timeframe_minutes} dibersihkan")
+    
+    def register_candle_close_callback(self, callback: Callable) -> None:
+        """Daftarkan callback yang akan dipanggil saat candle selesai/ditutup
+        
+        Args:
+            callback: Fungsi callback dengan signature (candle_data: Dict, timeframe_minutes: int)
+        """
+        if callback not in self.candle_close_callbacks:
+            self.candle_close_callbacks.append(callback)
+            logger.info(f"Callback candle close terdaftar untuk M{self.timeframe_minutes}")
+    
+    def unregister_candle_close_callback(self, callback: Callable) -> None:
+        """Hapus callback dari daftar
+        
+        Args:
+            callback: Fungsi callback yang akan dihapus
+        """
+        if callback in self.candle_close_callbacks:
+            self.candle_close_callbacks.remove(callback)
+            logger.info(f"Callback candle close dihapus dari M{self.timeframe_minutes}")
     
     def get_stats(self) -> Dict:
         """Get builder statistics including NaN scrub count"""
@@ -291,7 +323,9 @@ class OHLCBuilder:
             'candle_count': len(self.candles),
             'has_current_candle': self.current_candle is not None,
             'tick_count': self.tick_count,
-            'nan_scrub_count': self.nan_scrub_count
+            'nan_scrub_count': self.nan_scrub_count,
+            'last_completed_candle_timestamp': self.last_completed_candle_timestamp.isoformat() if self.last_completed_candle_timestamp else None,
+            'registered_callbacks': len(self.candle_close_callbacks)
         }
 
 
@@ -489,6 +523,10 @@ class MarketDataClient:
         self._loaded_from_db = False
         self._shutdown_in_progress = False
         
+        self._last_candle_close_time: Optional[datetime] = None
+        self._candle_close_event = asyncio.Event()
+        self._candle_close_callbacks: List[Callable] = []
+        
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=3,
             recovery_timeout=45.0,
@@ -496,11 +534,12 @@ class MarketDataClient:
             name="DerivWebSocket"
         )
         
-        logger.info("MarketDataClient initialized with enhanced error handling")
+        logger.info("MarketDataClient diinisialisasi dengan penanganan error yang ditingkatkan")
         logger.info(f"WebSocket URL: {self.ws_url}, Symbol: {self.symbol}")
-        logger.info("Pub/Sub mechanism initialized with lifecycle management")
-        logger.info("✅ Circuit breaker initialized for WebSocket connection (threshold=3, timeout=45s)")
-        logger.info("✅ Connection state machine initialized")
+        logger.info("Mekanisme Pub/Sub diinisialisasi dengan manajemen lifecycle")
+        logger.info("✅ Circuit breaker diinisialisasi untuk koneksi WebSocket (threshold=3, timeout=45s)")
+        logger.info("✅ State machine koneksi diinisialisasi")
+        logger.info("✅ Mekanisme candle close event diinisialisasi")
     
     async def _set_connection_state(self, new_state: ConnectionState):
         """Thread-safe state transition with logging"""
@@ -513,6 +552,85 @@ class MarketDataClient:
     def get_connection_state(self) -> ConnectionState:
         """Get current connection state"""
         return self._connection_state
+    
+    def register_candle_close_callback(self, callback: Callable) -> None:
+        """Daftarkan callback yang akan dipanggil saat candle selesai/ditutup
+        
+        Callback akan menerima parameter: (candle_data: Dict, timeframe_minutes: int)
+        Callback ini didaftarkan ke semua OHLC builders (M1 dan M5)
+        
+        Args:
+            callback: Fungsi callback dengan signature (candle_data: Dict, timeframe_minutes: int)
+        """
+        if callback not in self._candle_close_callbacks:
+            self._candle_close_callbacks.append(callback)
+            self.m1_builder.register_candle_close_callback(callback)
+            self.m5_builder.register_candle_close_callback(callback)
+            logger.info("Callback candle close terdaftar di MarketDataClient")
+    
+    def unregister_candle_close_callback(self, callback: Callable) -> None:
+        """Hapus callback dari daftar
+        
+        Args:
+            callback: Fungsi callback yang akan dihapus
+        """
+        if callback in self._candle_close_callbacks:
+            self._candle_close_callbacks.remove(callback)
+            self.m1_builder.unregister_candle_close_callback(callback)
+            self.m5_builder.unregister_candle_close_callback(callback)
+            logger.info("Callback candle close dihapus dari MarketDataClient")
+    
+    def get_last_candle_close_time(self) -> Optional[datetime]:
+        """Dapatkan timestamp candle close terakhir dari builder M1
+        
+        Returns:
+            Timestamp candle M1 yang terakhir ditutup, atau None jika belum ada
+        """
+        return self.m1_builder.last_completed_candle_timestamp
+    
+    def get_last_candle_close_time_m5(self) -> Optional[datetime]:
+        """Dapatkan timestamp candle close terakhir dari builder M5
+        
+        Returns:
+            Timestamp candle M5 yang terakhir ditutup, atau None jika belum ada
+        """
+        return self.m5_builder.last_completed_candle_timestamp
+    
+    @property
+    def candle_just_closed(self) -> bool:
+        """Check apakah baru saja ada candle close dalam 2 detik terakhir
+        
+        Returns:
+            True jika ada candle M1 yang ditutup dalam 2 detik terakhir
+        """
+        last_close = self.m1_builder.last_completed_candle_timestamp
+        if last_close is None:
+            return False
+        
+        now = datetime.now(pytz.UTC)
+        if last_close.tzinfo is None:
+            last_close = last_close.replace(tzinfo=pytz.UTC)
+        
+        time_since_close = (now - last_close).total_seconds()
+        return time_since_close <= 2.0
+    
+    @property
+    def candle_just_closed_m5(self) -> bool:
+        """Check apakah baru saja ada candle M5 close dalam 5 detik terakhir
+        
+        Returns:
+            True jika ada candle M5 yang ditutup dalam 5 detik terakhir
+        """
+        last_close = self.m5_builder.last_completed_candle_timestamp
+        if last_close is None:
+            return False
+        
+        now = datetime.now(pytz.UTC)
+        if last_close.tzinfo is None:
+            last_close = last_close.replace(tzinfo=pytz.UTC)
+        
+        time_since_close = (now - last_close).total_seconds()
+        return time_since_close <= 5.0
     
     def _log_tick_sample(self, bid: float, ask: float, quote: float, spread: Optional[float] = None, mode: str = "") -> None:
         """Centralized tick logging dengan sampling - increment counter HANYA 1x per tick"""

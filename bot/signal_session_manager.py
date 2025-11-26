@@ -9,6 +9,7 @@ from typing import Optional, Dict, Callable, List
 from dataclasses import dataclass, field
 import pytz
 from bot.logger import setup_logger
+from config import Config
 
 logger = setup_logger('SignalSessionManager')
 
@@ -42,6 +43,7 @@ class SignalSessionManager:
     
     def __init__(self):
         self.active_sessions: Dict[int, SignalSession] = {}
+        self._last_signal_info: Dict[int, dict] = {}
         self._session_lock = asyncio.Lock()
         self._event_lock = asyncio.Lock()
         self._event_handlers: Dict[str, List[Callable]] = {
@@ -50,13 +52,13 @@ class SignalSessionManager:
             'on_session_update': []
         }
         self._pending_events: List[tuple] = []
-        logger.info("Signal Session Manager initialized with enhanced locking")
+        logger.info("Signal Session Manager diinisialisasi dengan proteksi spam sinyal")
     
     def register_event_handler(self, event: str, handler: Callable):
         """Daftarkan event handler untuk lifecycle events"""
         if event in self._event_handlers:
             self._event_handlers[event].append(handler)
-            logger.debug(f"Event handler registered for: {event}")
+            logger.debug(f"Event handler terdaftar untuk: {event}")
     
     async def _emit_event_outside_lock(self, event: str, session: SignalSession):
         """
@@ -74,28 +76,113 @@ class SignalSessionManager:
                 else:
                     handler(session)
             except (SessionError, Exception) as e:
-                logger.error(f"Error in event handler for {event}: {e}")
+                logger.error(f"Error pada event handler untuk {event}: {e}")
     
-    async def can_create_signal(self, user_id: int, signal_source: str) -> tuple[bool, Optional[str]]:
+    def _get_last_signal_info(self, user_id: int) -> Optional[dict]:
+        """Ambil info sinyal terakhir untuk user"""
+        return self._last_signal_info.get(user_id)
+    
+    def _update_last_signal_info(self, user_id: int, signal_type: str, entry_price: float):
+        """Update info sinyal terakhir untuk user"""
+        self._last_signal_info[user_id] = {
+            'signal_type': signal_type,
+            'entry_price': entry_price,
+            'timestamp': datetime.now(pytz.UTC)
+        }
+        logger.debug(f"Info sinyal terakhir diperbarui - User:{user_id} Tipe:{signal_type} Harga:{entry_price}")
+    
+    async def can_create_signal(self, user_id: int, signal_source: str, 
+                                signal_type: Optional[str] = None,
+                                current_price: Optional[float] = None) -> tuple[bool, Optional[str]]:
         """
-        Cek apakah user bisa membuat sinyal baru
-        UNLIMITED MODE - Selalu izinkan sinyal baru tanpa batasan
+        Cek apakah user bisa membuat sinyal baru dengan proteksi spam
+        
+        Args:
+            user_id: ID user
+            signal_source: Sumber sinyal (auto/manual)
+            signal_type: Tipe sinyal (BUY/SELL)
+            current_price: Harga saat ini untuk cek pergerakan minimum
         
         Returns:
             (can_create, rejection_reason)
         """
-        # UNLIMITED - Tidak ada batasan sesi aktif
-        # Sinyal baru selalu diizinkan tanpa harus menunggu sinyal sebelumnya selesai
+        async with self._session_lock:
+            active_session = self.active_sessions.get(user_id)
+            last_info = self._last_signal_info.get(user_id)
+            
+            if active_session and signal_type:
+                if active_session.signal_type == signal_type:
+                    elapsed = (datetime.now(pytz.UTC) - active_session.started_at).total_seconds()
+                    cooldown = Config.TICK_COOLDOWN_FOR_SAME_SIGNAL
+                    
+                    if elapsed < cooldown:
+                        remaining = cooldown - elapsed
+                        reason = (
+                            f"Sinyal {signal_type} yang sama masih aktif. "
+                            f"Tunggu {remaining:.0f} detik lagi sebelum mengirim sinyal serupa."
+                        )
+                        logger.info(
+                            f"🚫 Sinyal ditolak (cooldown) - User:{user_id} Tipe:{signal_type} "
+                            f"Sisa:{remaining:.0f}s dari {cooldown}s"
+                        )
+                        return False, reason
+            
+            if last_info and signal_type and current_price is not None:
+                if last_info['signal_type'] == signal_type:
+                    time_since_last = (datetime.now(pytz.UTC) - last_info['timestamp']).total_seconds()
+                    cooldown = Config.TICK_COOLDOWN_FOR_SAME_SIGNAL
+                    
+                    if time_since_last < cooldown:
+                        last_price = last_info['entry_price']
+                        price_movement = abs(current_price - last_price)
+                        min_movement = Config.SIGNAL_MINIMUM_PRICE_MOVEMENT
+                        
+                        if price_movement < min_movement:
+                            remaining = cooldown - time_since_last
+                            reason = (
+                                f"Pergerakan harga belum cukup ({price_movement:.2f} < {min_movement:.2f}). "
+                                f"Tunggu {remaining:.0f}s atau pergerakan harga {min_movement:.2f}+ sebelum sinyal {signal_type} baru."
+                            )
+                            logger.info(
+                                f"🚫 Sinyal ditolak (pergerakan harga minimal) - User:{user_id} "
+                                f"Tipe:{signal_type} Pergerakan:{price_movement:.2f} < Min:{min_movement:.2f}"
+                            )
+                            return False, reason
+        
         return True, None
     
     async def create_session(self, user_id: int, signal_id: str, signal_source: str,
                             signal_type: str, entry_price: float, stop_loss: float,
-                            take_profit: float) -> SignalSession:
-        """Buat sesi sinyal baru"""
+                            take_profit: float) -> Optional[SignalSession]:
+        """
+        Buat sesi sinyal baru dengan proteksi overwrite
+        
+        Returns:
+            SignalSession jika berhasil, None jika ditolak
+        """
         async with self._session_lock:
             if user_id in self.active_sessions:
                 old_session = self.active_sessions[user_id]
-                logger.warning(f"Overwriting active session for user {user_id}: {old_session.signal_id}")
+                
+                if old_session.signal_type == signal_type:
+                    if not Config.AUTO_SIGNAL_REPLACEMENT_ALLOWED:
+                        elapsed = (datetime.now(pytz.UTC) - old_session.started_at).total_seconds()
+                        logger.warning(
+                            f"⛔ Sesi TIDAK di-overwrite - User:{user_id} "
+                            f"Tipe sinyal sama ({signal_type}) dan AUTO_SIGNAL_REPLACEMENT_ALLOWED=false. "
+                            f"Sesi aktif sudah berjalan {elapsed:.1f}s"
+                        )
+                        return None
+                    else:
+                        logger.info(
+                            f"🔄 Sesi akan di-overwrite (diizinkan) - User:{user_id} "
+                            f"Tipe:{signal_type} AUTO_SIGNAL_REPLACEMENT_ALLOWED=true"
+                        )
+                else:
+                    logger.info(
+                        f"🔄 Sesi akan di-overwrite (tipe berbeda) - User:{user_id} "
+                        f"Lama:{old_session.signal_type} -> Baru:{signal_type}"
+                    )
             
             session = SignalSession(
                 user_id=user_id,
@@ -112,8 +199,17 @@ class SignalSessionManager:
             
             self.active_sessions[user_id] = session
             
+            self._last_signal_info[user_id] = {
+                'signal_type': signal_type,
+                'entry_price': entry_price,
+                'timestamp': datetime.now(pytz.UTC)
+            }
+            
             icon = "🤖" if signal_source == "auto" else "👤"
-            logger.info(f"✅ Signal session created - User:{user_id} {icon} {signal_source.upper()} {signal_type}")
+            logger.info(
+                f"✅ Sesi sinyal dibuat - User:{user_id} {icon} {signal_source.upper()} "
+                f"Tipe:{signal_type} Harga:{entry_price}"
+            )
             
         await self._emit_event_outside_lock('on_session_start', session)
         
@@ -123,7 +219,7 @@ class SignalSessionManager:
         """Update sesi yang sedang aktif"""
         async with self._session_lock:
             if user_id not in self.active_sessions:
-                logger.warning(f"Attempting to update non-existent session for user {user_id}")
+                logger.warning(f"Mencoba update sesi yang tidak ada untuk user {user_id}")
                 return False
             
             session = self.active_sessions[user_id]
@@ -143,7 +239,7 @@ class SignalSessionManager:
         
         async with self._session_lock:
             if user_id not in self.active_sessions:
-                logger.debug(f"No active session to end for user {user_id}")
+                logger.debug(f"Tidak ada sesi aktif untuk diakhiri - User:{user_id}")
                 return None
             
             session = self.active_sessions[user_id]
@@ -155,8 +251,8 @@ class SignalSessionManager:
             icon = "🤖" if session.signal_source == "auto" else "👤"
             
             logger.info(
-                f"🏁 Signal session ended - User:{user_id} {icon} {session.signal_source.upper()} "
-                f"Reason:{reason} Duration:{duration:.1f}s"
+                f"🏁 Sesi sinyal diakhiri - User:{user_id} {icon} {session.signal_source.upper()} "
+                f"Alasan:{reason} Durasi:{duration:.1f}s"
             )
         
         if chart_path:
@@ -172,14 +268,14 @@ class SignalSessionManager:
             import os
             if chart_path and os.path.exists(chart_path):
                 os.remove(chart_path)
-                logger.info(f"🗑️ Cleaned up session chart: {chart_path}")
+                logger.info(f"🗑️ Chart sesi dibersihkan: {chart_path}")
                 
                 if os.path.exists(chart_path):
-                    logger.warning(f"Chart file still exists after deletion: {chart_path}")
+                    logger.warning(f"File chart masih ada setelah dihapus: {chart_path}")
         except FileNotFoundError:
-            logger.debug(f"Chart file already deleted: {chart_path}")
+            logger.debug(f"File chart sudah dihapus: {chart_path}")
         except (SessionError, Exception) as e:
-            logger.warning(f"Failed to cleanup chart {chart_path}: {e}")
+            logger.warning(f"Gagal membersihkan chart {chart_path}: {e}")
     
     async def clear_all_sessions(self, reason: str = "system_reset") -> int:
         """
@@ -195,10 +291,10 @@ class SignalSessionManager:
             session_count = len(self.active_sessions)
             
             if session_count == 0:
-                logger.info("No active sessions to clear")
+                logger.info("Tidak ada sesi aktif untuk dibersihkan")
                 return 0
             
-            logger.info(f"Clearing all {session_count} active signal sessions...")
+            logger.info(f"Membersihkan semua {session_count} sesi sinyal aktif...")
             
             sessions_to_end = list(self.active_sessions.values())
             chart_paths = [s.chart_path for s in sessions_to_end if s.chart_path]
@@ -208,11 +304,12 @@ class SignalSessionManager:
                 icon = "🤖" if session.signal_source == "auto" else "👤"
                 
                 logger.info(
-                    f"🏁 Clearing session - User:{session.user_id} {icon} {session.signal_source.upper()} "
-                    f"Type:{session.signal_type} Reason:{reason} Duration:{duration:.1f}s"
+                    f"🏁 Membersihkan sesi - User:{session.user_id} {icon} {session.signal_source.upper()} "
+                    f"Tipe:{session.signal_type} Alasan:{reason} Durasi:{duration:.1f}s"
                 )
             
             self.active_sessions.clear()
+            self._last_signal_info.clear()
         
         for chart_path in chart_paths:
             await self._cleanup_chart_file(chart_path)
@@ -221,9 +318,9 @@ class SignalSessionManager:
             try:
                 await self._emit_event_outside_lock('on_session_end', session)
             except (SessionError, Exception) as e:
-                logger.error(f"Error emitting end event for session {session.signal_id}: {e}")
+                logger.error(f"Error saat emit event end untuk sesi {session.signal_id}: {e}")
         
-        logger.info(f"✅ All {session_count} signal sessions cleared successfully")
+        logger.info(f"✅ Semua {session_count} sesi sinyal berhasil dibersihkan")
         
         return session_count
     
@@ -238,6 +335,10 @@ class SignalSessionManager:
     def has_active_session(self, user_id: int) -> bool:
         """Cek apakah user punya sesi aktif"""
         return user_id in self.active_sessions
+    
+    def get_last_signal_info(self, user_id: int) -> Optional[dict]:
+        """Ambil info sinyal terakhir untuk user (public method)"""
+        return self._last_signal_info.get(user_id)
     
     def get_all_active_sessions(self) -> Dict[int, SignalSession]:
         """Ambil semua sesi yang aktif"""
@@ -255,5 +356,6 @@ class SignalSessionManager:
         return {
             'total_sessions': len(self.active_sessions),
             'auto_sessions': auto_count,
-            'manual_sessions': manual_count
+            'manual_sessions': manual_count,
+            'tracked_last_signals': len(self._last_signal_info)
         }

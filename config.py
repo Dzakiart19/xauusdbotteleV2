@@ -503,6 +503,11 @@ class Config:
     
     SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '0')
     MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '0')
+    
+    SIGNAL_MINIMUM_PRICE_MOVEMENT = _get_float_env('SIGNAL_MINIMUM_PRICE_MOVEMENT', '0.50')
+    TICK_COOLDOWN_FOR_SAME_SIGNAL = _get_int_env('TICK_COOLDOWN_FOR_SAME_SIGNAL', '60')
+    AUTO_SIGNAL_REPLACEMENT_ALLOWED = os.getenv('AUTO_SIGNAL_REPLACEMENT_ALLOWED', 'false').lower() == 'true'
+    CANDLE_CLOSE_ONLY_SIGNALS = os.getenv('CANDLE_CLOSE_ONLY_SIGNALS', 'true').lower() == 'true'
     DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '0.0')
     RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '1.0')
     FIXED_RISK_AMOUNT = _get_float_env('FIXED_RISK_AMOUNT', '1.0')

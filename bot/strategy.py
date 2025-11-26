@@ -1,7 +1,9 @@
 from typing import Optional, Dict, Tuple, Any, List, NamedTuple
+from datetime import datetime
 import json
 from bot.logger import setup_logger
 import math
+import pytz
 from dataclasses import dataclass, field
 
 logger = setup_logger('Strategy')
@@ -399,6 +401,87 @@ class TradingStrategy:
         self.config = config
         self.alert_system = alert_system
         self.last_volatility_alert = None
+        
+        self.last_signal_candle_timestamp: Optional[datetime] = None
+        self.last_signal_type: Optional[str] = None
+        self.last_signal_price: Optional[float] = None
+        self.last_signal_time: Optional[datetime] = None
+    
+    def should_generate_signal(self, candle_timestamp: Optional[datetime], 
+                                current_price: float, 
+                                signal_type: str) -> Tuple[bool, str]:
+        """Cek apakah boleh generate signal baru berdasarkan candle close tracking
+        
+        Kriteria:
+        1. Candle baru (timestamp berbeda dari last_signal_candle_timestamp)
+        2. Minimum price movement dari last_signal_price
+        3. Cooldown dari last_signal_time
+        
+        Args:
+            candle_timestamp: Timestamp candle saat ini
+            current_price: Harga close saat ini
+            signal_type: Tipe signal ('BUY' atau 'SELL')
+            
+        Returns:
+            Tuple[bool, str]: (can_generate, reason)
+        """
+        current_time = datetime.now(pytz.UTC)
+        
+        if candle_timestamp is not None and self.last_signal_candle_timestamp is not None:
+            if candle_timestamp == self.last_signal_candle_timestamp:
+                reason = f"🚫 Signal di-skip: Masih dalam candle yang sama (timestamp: {candle_timestamp})"
+                logger.info(reason)
+                return False, reason
+        
+        cooldown_seconds = getattr(self.config, 'SIGNAL_COOLDOWN_SECONDS', 0)
+        if cooldown_seconds > 0 and self.last_signal_time is not None:
+            time_since_last = (current_time - self.last_signal_time).total_seconds()
+            if time_since_last < cooldown_seconds:
+                remaining = cooldown_seconds - time_since_last
+                reason = f"🚫 Signal di-skip: Cooldown aktif (sisa {remaining:.0f} detik dari {cooldown_seconds}s)"
+                logger.info(reason)
+                return False, reason
+        
+        min_price_movement = getattr(self.config, 'SIGNAL_MINIMUM_PRICE_MOVEMENT', 0.50)
+        if self.last_signal_price is not None and min_price_movement > 0:
+            price_diff = abs(current_price - self.last_signal_price)
+            if price_diff < min_price_movement:
+                reason = f"🚫 Signal di-skip: Pergerakan harga terlalu kecil (${price_diff:.2f} < ${min_price_movement:.2f})"
+                logger.info(reason)
+                return False, reason
+        
+        tick_cooldown = getattr(self.config, 'TICK_COOLDOWN_FOR_SAME_SIGNAL', 60)
+        if (self.last_signal_type == signal_type and 
+            self.last_signal_time is not None and 
+            tick_cooldown > 0):
+            time_since_last = (current_time - self.last_signal_time).total_seconds()
+            if time_since_last < tick_cooldown:
+                remaining = tick_cooldown - time_since_last
+                reason = f"🚫 Signal di-skip: Signal {signal_type} yang sama dalam cooldown (sisa {remaining:.0f}s dari {tick_cooldown}s)"
+                logger.info(reason)
+                return False, reason
+        
+        candle_info = f"candle {candle_timestamp}" if candle_timestamp else "realtime"
+        reason = f"✅ Signal diizinkan: Candle baru ({candle_info}), harga berbeda, cooldown clear"
+        logger.debug(reason)
+        return True, reason
+    
+    def _update_signal_tracking(self, candle_timestamp: Optional[datetime],
+                                  signal_type: str, 
+                                  entry_price: float):
+        """Update tracking setelah signal berhasil di-generate
+        
+        Args:
+            candle_timestamp: Timestamp candle saat signal di-generate
+            signal_type: Tipe signal ('BUY' atau 'SELL')
+            entry_price: Harga entry signal
+        """
+        self.last_signal_candle_timestamp = candle_timestamp
+        self.last_signal_type = signal_type
+        self.last_signal_price = entry_price
+        self.last_signal_time = datetime.now(pytz.UTC)
+        
+        logger.info(f"📝 Signal tracking updated: {signal_type} @ ${entry_price:.2f} | Candle: {candle_timestamp}")
     
     def calculate_trend_strength(self, indicators: Dict) -> Tuple[float, str]:
         """Calculate trend strength with validation and error handling
@@ -1321,7 +1404,7 @@ class TradingStrategy:
             logger.error(f"Error in calculate_sl_tp: {e}")
             return None, None, None, None
         
-    def detect_signal(self, indicators: Dict, timeframe: str = 'M1', signal_source: str = 'auto', current_spread: float = 0.0) -> Optional[Dict]:  # pyright: ignore[reportGeneralTypeIssues]
+    def detect_signal(self, indicators: Dict, timeframe: str = 'M1', signal_source: str = 'auto', current_spread: float = 0.0, candle_timestamp: Optional[datetime] = None) -> Optional[Dict]:  # pyright: ignore[reportGeneralTypeIssues]
         """Detect trading signal with multi-confirmation strategy
         
         Uses professional multi-confirmation approach with 6 MANDATORY filters:
@@ -1333,6 +1416,13 @@ class TradingStrategy:
         6. Spread Filter (MANDATORY): Spread < MAX_SPREAD_PIPS
         
         ALL 6 filters MUST pass for signal to be generated.
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            timeframe: Timeframe string (e.g., 'M1', 'M5')
+            signal_source: Source of signal ('auto' atau 'manual')
+            current_spread: Current spread in price units
+            candle_timestamp: Timestamp candle untuk tracking (opsional)
         
         Note: This function is intentionally complex due to multi-indicator trading logic.
         Pyright complexity warning is suppressed as it does not affect runtime behavior.
@@ -1398,6 +1488,20 @@ class TradingStrategy:
             if signal_source == 'auto':
                 if mc_result['all_mandatory_passed']:
                     signal = mc_result['signal_type']
+                    
+                    candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
+                    if candle_close_only and signal:
+                        close_price = safe_float(close, 0.0)
+                        can_generate, skip_reason = self.should_generate_signal(
+                            candle_timestamp, close_price, signal
+                        )
+                        if not can_generate:
+                            logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif: {skip_reason}")
+                            logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
+                            return None
+                        else:
+                            logger.info(f"🕯️ Candle close check PASSED: Signal diizinkan untuk candle baru")
+                    
                     logger.info(f"✅ WEIGHTED SCORE PASSED - Signal: {signal}")
                     logger.info(f"📊 Weighted Score: {adjusted_score:.0f}% (threshold: {auto_threshold}%)")
                     
@@ -1475,6 +1579,20 @@ class TradingStrategy:
                 
                 if trend_passed and adjusted_score >= manual_threshold:
                     signal = mc_result['signal_type']
+                    
+                    candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
+                    if candle_close_only and signal:
+                        close_price = safe_float(close, 0.0)
+                        can_generate, skip_reason = self.should_generate_signal(
+                            candle_timestamp, close_price, signal
+                        )
+                        if not can_generate:
+                            logger.info(f"⏳ CANDLE_CLOSE_ONLY_SIGNALS aktif (manual): {skip_reason}")
+                            logger.info(f"📊 Signal {signal} terdeteksi tapi di-skip - menunggu candle baru")
+                            return None
+                        else:
+                            logger.info(f"🕯️ Candle close check PASSED (manual): Signal diizinkan")
+                    
                     logger.info(f"✅ MANUAL SIGNAL APPROVED - Weighted Score: {adjusted_score:.0f}% (threshold: {manual_threshold}%)")
                     confidence_reasons = mc_result.get('confidence_reasons', [])
                     confidence_reasons.append(f"Manual Mode Weighted Score: {adjusted_score:.0f}%")
@@ -1615,6 +1733,8 @@ class TradingStrategy:
                 logger.info(f"Trend Strength: {trend_desc} (score: {trend_strength:.2f})")
                 logger.info(f"Dynamic TP Ratio: {dynamic_tp_ratio:.2f}x (Expected profit: ${expected_profit:.2f})")
                 logger.info(f"Risk: ${expected_loss:.2f} | Reward: ${expected_profit:.2f} | R:R = 1:{dynamic_tp_ratio:.2f}")
+                
+                self._update_signal_tracking(candle_timestamp, signal, float(close_val))
                 
                 def safe_indicator_float(val, default=None):
                     """Convert indicator value to float safely for JSON serialization"""

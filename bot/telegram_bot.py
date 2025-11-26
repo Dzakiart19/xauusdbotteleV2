@@ -260,8 +260,10 @@ class TradingBot:
         logger.info(f"✅ UNLIMITED signal detection: global_cooldown={self.global_signal_cooldown}s, tick_throttle={self.tick_throttle_seconds}s")
         
         self.sent_signals_cache: Dict[str, Dict[str, Any]] = {}
-        self.signal_cache_expiry_seconds = 120
+        self.signal_cache_expiry_seconds = 300  # 5 menit cache expiry
         self.signal_price_tolerance_pips = 10.0
+        self.last_signal_per_type: Dict[str, Dict] = {}  # Tracking terakhir per signal type (BUY/SELL)
+        logger.info(f"✅ Anti-duplicate cache: expiry={self.signal_cache_expiry_seconds}s, dengan tracking per signal type")
         self._cache_lock = asyncio.Lock()
         self._dashboard_lock = asyncio.Lock()
         self._chart_cleanup_lock = asyncio.Lock()
@@ -308,19 +310,27 @@ class TradingBot:
         return False
     
     def _generate_signal_hash(self, user_id: int, signal_type: str, entry_price: float) -> str:
+        """Generate hash unik untuk signal berdasarkan user, type, price bucket, dan timestamp bucket per menit."""
         price_bucket = round(entry_price / (self.signal_price_tolerance_pips / self.config.XAUUSD_PIP_VALUE))
-        return f"{user_id}_{signal_type}_{price_bucket}"
+        # Tambahkan timestamp bucket per menit untuk memastikan signal baru setelah 1 menit dianggap berbeda
+        now = datetime.now()
+        time_bucket = now.strftime('%Y%m%d%H%M')  # Format: YYYYMMDDHHMM (per menit)
+        return f"{user_id}_{signal_type}_{price_bucket}_{time_bucket}"
     
     async def _check_and_set_pending(self, user_id: int, signal_type: str, entry_price: float) -> bool:
         """Check for duplicate and set pending status atomically. Returns True if signal can proceed.
         
-        Uses TTL-backed cache with time decay for automatic expiry.
-        Tracks telemetry for cache hits/misses.
+        Enhanced anti-duplicate dengan:
+        - TTL-backed cache dengan time decay untuk automatic expiry
+        - Cooldown per signal type (minimal TICK_COOLDOWN_FOR_SAME_SIGNAL detik antara signal sama)
+        - Minimum price movement check (SIGNAL_MINIMUM_PRICE_MOVEMENT)
+        - Telemetry tracking untuk cache hits/misses
         """
         async with self._cache_lock:
             now = datetime.now()
             cache_copy = dict(self.sent_signals_cache)
             
+            # Cleanup expired entries
             expired_keys = [
                 k for k, v in cache_copy.items() 
                 if (now - v['timestamp']).total_seconds() > self.signal_cache_expiry_seconds
@@ -330,6 +340,7 @@ class TradingBot:
                     self.sent_signals_cache.pop(k, None)
                 self._cache_telemetry['expired_cleanups'] += len(expired_keys)
             
+            # Cache size enforcement
             if len(self.sent_signals_cache) >= self.MAX_CACHE_SIZE:
                 sorted_entries = sorted(
                     self.sent_signals_cache.items(),
@@ -340,8 +351,32 @@ class TradingBot:
                     key_to_remove = sorted_entries[i][0]
                     self.sent_signals_cache.pop(key_to_remove, None)
                 self._cache_telemetry['size_enforcements'] += 1
-                logger.debug(f"Cache limit enforcement: removed {entries_to_remove} oldest entries")
+                logger.debug(f"Cache limit enforcement: dihapus {entries_to_remove} entry terlama")
             
+            # === CEK COOLDOWN PER SIGNAL TYPE ===
+            # Cek apakah signal type yang sama sudah dikirim dalam periode cooldown
+            type_key = f"{user_id}_{signal_type}"
+            last_same_type = self.last_signal_per_type.get(type_key)
+            if last_same_type:
+                time_since_last = (now - last_same_type['timestamp']).total_seconds()
+                cooldown = getattr(self.config, 'TICK_COOLDOWN_FOR_SAME_SIGNAL', 60)
+                
+                if time_since_last < cooldown:
+                    logger.info(f"🚫 Signal {signal_type} diblokir: cooldown per type belum habis ({time_since_last:.1f}s < {cooldown}s)")
+                    self._cache_telemetry['hits'] += 1
+                    return False
+                
+                # === CEK MINIMUM PRICE MOVEMENT ===
+                last_price = last_same_type.get('entry_price', 0)
+                min_movement = getattr(self.config, 'SIGNAL_MINIMUM_PRICE_MOVEMENT', 0.50)
+                price_diff = abs(entry_price - last_price)
+                
+                if price_diff < min_movement:
+                    logger.info(f"🚫 Signal {signal_type} diblokir: pergerakan harga terlalu kecil (${price_diff:.2f} < ${min_movement:.2f})")
+                    self._cache_telemetry['hits'] += 1
+                    return False
+            
+            # === CEK HASH CACHE (duplicate exact signal) ===
             signal_hash = self._generate_signal_hash(user_id, signal_type, entry_price)
             
             cached = self.sent_signals_cache.get(signal_hash)
@@ -349,11 +384,14 @@ class TradingBot:
                 status = cached.get('status', 'confirmed')
                 time_since = (now - cached['timestamp']).total_seconds()
                 self._cache_telemetry['hits'] += 1
-                logger.debug(f"Cache HIT - Duplicate signal blocked: {signal_hash}, status={status}, {time_since:.1f}s ago")
+                logger.debug(f"Cache HIT - Signal duplikat diblokir: {signal_hash}, status={status}, {time_since:.1f}s lalu")
                 return False
             
+            # === SIGNAL DIIZINKAN - Set pending dan update tracking ===
             self._cache_telemetry['misses'] += 1
             self._cache_telemetry['pending_set'] += 1
+            
+            # Update cache dengan signal baru
             self.sent_signals_cache[signal_hash] = {
                 'status': 'pending',
                 'timestamp': now,
@@ -361,7 +399,15 @@ class TradingBot:
                 'signal_type': signal_type,
                 'entry_price': entry_price
             }
-            logger.debug(f"Cache MISS - Signal marked as pending: {signal_hash}")
+            
+            # Update tracking per signal type
+            self.last_signal_per_type[type_key] = {
+                'timestamp': now,
+                'entry_price': entry_price,
+                'signal_type': signal_type
+            }
+            
+            logger.debug(f"Cache MISS - Signal ditandai pending: {signal_hash}")
             return True
     
     async def _confirm_signal_sent(self, user_id: int, signal_type: str, entry_price: float):
@@ -1456,7 +1502,7 @@ class TradingBot:
     
     async def _monitoring_loop(self, chat_id: int):
         tick_queue = await self.market_data.subscribe_ticks(f'telegram_bot_{chat_id}')
-        logger.debug(f"Monitoring started for user {mask_user_id(chat_id)}")
+        logger.debug(f"Monitoring dimulai untuk user {mask_user_id(chat_id)}")
         
         last_signal_check = datetime.now() - timedelta(seconds=self.config.SIGNAL_COOLDOWN_SECONDS)
         last_tick_process_time = datetime.now() - timedelta(seconds=self.tick_throttle_seconds)
@@ -1465,6 +1511,7 @@ class TradingBot:
         last_sent_signal_time = datetime.now() - timedelta(seconds=5)
         retry_delay = 1.0
         max_retry_delay = 30.0
+        last_candle_timestamp = None  # Tracking timestamp candle terakhir untuk detect candle baru
         
         try:
             while self.monitoring and chat_id in self.monitoring_chats and not self._is_shutting_down:
@@ -1486,6 +1533,24 @@ class TradingBot:
                         continue
                     
                     candle_count = len(df_m1)
+                    
+                    # === CANDLE CLOSE ONLY SIGNALS ===
+                    # Jika CANDLE_CLOSE_ONLY_SIGNALS aktif, hanya proses signal saat candle baru terbentuk
+                    candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', False)
+                    if candle_close_only and candle_count > 0:
+                        current_candle_timestamp = df_m1.index[-1] if hasattr(df_m1.index[-1], 'timestamp') else df_m1.index[-1]
+                        
+                        # Cek apakah ini candle baru
+                        if last_candle_timestamp is not None:
+                            if current_candle_timestamp == last_candle_timestamp:
+                                # Masih candle yang sama, skip signal detection
+                                continue
+                            else:
+                                # Candle baru terdeteksi
+                                logger.debug(f"🕯️ Candle baru terdeteksi: {current_candle_timestamp}")
+                        
+                        # Update tracking candle timestamp
+                        last_candle_timestamp = current_candle_timestamp
                     
                     if candle_count >= 30:
                         # EARLY CHECK: Skip signal detection if user already has active position

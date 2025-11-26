@@ -30,11 +30,8 @@ class MessageFormatter:
         return "▰" * filled + "▱" * empty
     
     @staticmethod
-    def signal_alert(signal: dict, signal_source: str = 'auto') -> str:
-        """Format pesan alert sinyal trading"""
-        icon = "🤖" if signal_source == 'auto' else "👤"
-        mode = "OTOMATIS" if signal_source == 'auto' else "MANUAL"
-        
+    def signal_alert(signal: dict, signal_source: str = 'auto', config=None) -> str:
+        """Format pesan alert sinyal trading - Format Profesional"""
         signal_type = signal['signal']
         direction_icon = "🟢" if signal_type == 'BUY' else "🔴"
         
@@ -46,21 +43,45 @@ class MessageFormatter:
         tp_pips = signal.get('tp_pips', 0)
         rr_ratio = signal.get('rr_ratio', 0)
         
-        trend_desc = signal.get('trend_description', 'MEDIUM')
+        lot_size = signal.get('lot_size', 0.01)
+        risk_percent = signal.get('risk_percent', 1.0)
+        risk_amount = signal.get('risk_amount', 0)
+        account_balance = signal.get('account_balance', 0)
         
-        confidence_reasons = signal.get('confidence_reasons', [])
-        confidence_text = "\n".join(f"  • {reason}" for reason in confidence_reasons[:5])
+        if config and account_balance == 0:
+            account_balance = getattr(config, 'ACCOUNT_BALANCE', 0)
+        if config and risk_percent == 1.0:
+            risk_percent = getattr(config, 'RISK_PER_TRADE_PERCENT', 1.0)
+        if risk_amount == 0 and account_balance > 0:
+            risk_amount = account_balance * risk_percent / 100
+        
+        trend_status = signal.get('trend_status', signal.get('trend_description', 'N/A'))
+        momentum_status = signal.get('momentum_status', 'N/A')
+        volume_status = signal.get('volume_status', 'N/A')
+        vwap_status = signal.get('vwap_status', 'N/A')
+        
+        timeframe = signal.get('timeframe', 'M1')
+        timestamp = datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')
         
         msg = (
-            f"{direction_icon} *SINYAL {signal_type}* {icon} {mode}\n"
-            f"{'━' * 32}\n\n"
-            f"💰 *Entry:* `${entry:.2f}`\n"
-            f"🛡️ *Stop Loss:* `${sl:.2f}` ({sl_pips:.1f} pips)\n"
-            f"🎯 *Take Profit:* `${tp:.2f}` ({tp_pips:.1f} pips)\n"
-            f"📊 *Risk:Reward:* `1:{rr_ratio:.2f}`\n\n"
-            f"⚡ *Trend Strength:* {trend_desc}\n\n"
-            f"📌 *Alasan:*\n{confidence_text}\n\n"
-            f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"
+            f"{direction_icon} *SIGNAL {signal_type} - XAUUSD*\n"
+            f"{'━' * 22}\n"
+            f"📊 Entry: `${entry:.2f}`\n"
+            f"🛡️ Stop Loss: `${sl:.2f}` ({sl_pips:.1f} pips)\n"
+            f"🎯 Take Profit: `${tp:.2f}` ({tp_pips:.1f} pips)\n"
+            f"📈 Risk:Reward = 1:{rr_ratio:.1f}\n\n"
+            f"💰 *Risk Management:*\n"
+            f"• Lot Size: {lot_size:.2f}\n"
+            f"• Risk: {risk_percent:.1f}% (${risk_amount:.2f})\n"
+            f"• Modal: ${account_balance:.2f}\n\n"
+            f"📋 *Konfirmasi:*\n"
+            f"• Trend: {trend_status}\n"
+            f"• Momentum: {momentum_status}\n"
+            f"• Volume: {volume_status}\n"
+            f"• VWAP: {vwap_status}\n\n"
+            f"⏰ Waktu: {timestamp}\n"
+            f"📊 Timeframe: {timeframe}\n"
+            f"{'━' * 22}"
         )
         
         return msg
@@ -116,41 +137,43 @@ class MessageFormatter:
         return msg
     
     @staticmethod
-    def trade_exit(exit_data: dict) -> str:
-        """Format pesan trade exit"""
+    def trade_exit(exit_data: dict, pip_value: float = 10.0) -> str:
+        """Format pesan trade exit - Format Profesional"""
         result = exit_data['result']
         signal_type = exit_data['signal_type']
         entry = exit_data['entry_price']
         exit_price = exit_data['exit_price']
         pl = exit_data['actual_pl']
         reason = exit_data.get('reason', 'CLOSED')
+        duration = exit_data.get('duration', 'N/A')
         
         result_icon = "✅" if result == 'WIN' else "❌"
-        result_text = "PROFIT" if result == 'WIN' else "LOSS"
+        result_text = "TP HIT" if reason == 'TP_HIT' else ("SL HIT" if reason in ['SL_HIT', 'DYNAMIC_SL_HIT'] else result)
         
-        direction_icon = "🟢" if signal_type == 'BUY' else "🔴"
+        price_diff = abs(exit_price - entry)
+        pl_pips = price_diff * pip_value
         
-        price_change = exit_price - entry
-        price_change_pct = (price_change / entry) * 100
-        
+        pl_emoji = "💰" if pl >= 0 else "📉"
         pl_text = f"+${pl:.2f}" if pl >= 0 else f"-${abs(pl):.2f}"
         
-        reason_text = {
-            'TP_HIT': 'Target Tercapai 🎯',
-            'SL_HIT': 'Stop Loss Hit 🛡️',
-            'DYNAMIC_SL_HIT': 'Dynamic SL Triggered 🔄',
-            'MANUAL_CLOSE': 'Manual Close 👤',
-            'CLOSED': 'Posisi Ditutup'
-        }.get(reason, reason)
+        if isinstance(duration, (int, float)):
+            hours = int(duration // 3600)
+            minutes = int((duration % 3600) // 60)
+            if hours > 0:
+                duration_str = f"{hours}h {minutes}m"
+            else:
+                duration_str = f"{minutes}m"
+        else:
+            duration_str = str(duration) if duration else "N/A"
         
         msg = (
-            f"{result_icon} *{result_text}* {direction_icon}\n"
-            f"{'━' * 32}\n\n"
-            f"📍 *Entry:* `${entry:.2f}`\n"
-            f"🏁 *Exit:* `${exit_price:.2f}` ({price_change_pct:+.3f}%)\n"
-            f"💰 *P/L:* `{pl_text}`\n\n"
-            f"📋 *Status:* {reason_text}\n"
-            f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"
+            f"{result_icon} *TRADE CLOSED - {result_text}*\n"
+            f"{'━' * 22}\n"
+            f"📊 Entry: `${entry:.2f}`\n"
+            f"📊 Exit: `${exit_price:.2f}`\n"
+            f"💰 P/L: {pl_emoji} {pl_text} ({pl_pips:.1f} pips)\n"
+            f"⏱️ Duration: {duration_str}\n"
+            f"{'━' * 22}"
         )
         
         return msg
@@ -200,7 +223,7 @@ class MessageFormatter:
     
     @staticmethod
     def statistics_summary(stats: dict) -> str:
-        """Format statistik trading"""
+        """Format statistik trading - untuk /performa"""
         total_trades = stats.get('total_trades', 0)
         wins = stats.get('wins', 0)
         losses = stats.get('losses', 0)
@@ -213,13 +236,48 @@ class MessageFormatter:
         
         return (
             f"📊 *Statistik Trading*\n"
-            f"{'━' * 32}\n\n"
+            f"{'━' * 22}\n\n"
             f"📈 *Total Trades:* {total_trades}\n"
             f"✅ *Wins:* {wins}\n"
             f"❌ *Losses:* {losses}\n"
             f"{win_rate_emoji} *Win Rate:* {win_rate:.1f}%\n\n"
             f"{pl_emoji} *Total P/L:* `{pl_text}`\n\n"
             f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d %H:%M WIB')}"
+        )
+    
+    @staticmethod
+    def daily_stats(stats: dict) -> str:
+        """Format statistik harian - untuk /stats command"""
+        total_trades = stats.get('total_trades', 0)
+        wins = stats.get('wins', 0)
+        losses = stats.get('losses', 0)
+        win_rate = stats.get('win_rate', 0)
+        net_pl = stats.get('total_pl', 0)
+        profit_factor = stats.get('profit_factor', 'N/A')
+        
+        avg_win = stats.get('avg_win', 0)
+        avg_loss = stats.get('avg_loss', 0)
+        avg_rr = (avg_win / avg_loss) if avg_loss > 0 else 0
+        
+        pl_emoji = "💰" if net_pl >= 0 else "📉"
+        pl_text = f"+${net_pl:.2f}" if net_pl >= 0 else f"-${abs(net_pl):.2f}"
+        
+        profit_factor_str = f"{profit_factor:.2f}" if isinstance(profit_factor, (int, float)) else str(profit_factor)
+        avg_rr_str = f"1:{avg_rr:.1f}" if avg_rr > 0 else "N/A"
+        
+        date_str = stats.get('date', datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%Y-%m-%d'))
+        
+        return (
+            f"📊 *STATISTIK HARI INI*\n"
+            f"{'━' * 22}\n"
+            f"📈 Total Trade: {total_trades}\n"
+            f"✅ Win: {wins} | ❌ Loss: {losses}\n"
+            f"📊 Win Rate: {win_rate:.1f}%\n"
+            f"💰 Net P/L: {pl_emoji} {pl_text}\n"
+            f"📈 Profit Factor: {profit_factor_str}\n"
+            f"🎯 Avg RR: {avg_rr_str}\n"
+            f"{'━' * 22}\n\n"
+            f"📅 Tanggal: {date_str}"
         )
     
     @staticmethod

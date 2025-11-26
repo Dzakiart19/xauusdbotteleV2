@@ -1185,6 +1185,7 @@ class TradingBot:
                 "/status - Cek posisi aktif\n"
                 "/riwayat - Lihat riwayat trading\n"
                 "/performa - Statistik performa\n"
+                "/stats - Statistik harian\n"
                 "/analytics - Comprehensive analytics\n"
                 "/systemhealth - System health status\n"
                 "/tasks - Lihat scheduled tasks\n"
@@ -2067,7 +2068,8 @@ class TradingBot:
                                     f"📊 Status: {position_db.status}\n\n"
                                     f"💡 Cek hasil:\n"
                                     f"  • /riwayat - Riwayat trading\n"
-                                    f"  • /performa - Statistik lengkap\n\n"
+                                    f"  • /performa - Statistik lengkap\n"
+                                    f"  • /stats - Statistik harian\n\n"
                                     f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"
                                 )
                                 
@@ -2300,6 +2302,45 @@ class TradingBot:
         finally:
             if session:
                 session.close()
+    
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tampilkan statistik harian dengan format profesional"""
+        if not self.is_authorized(update.effective_user.id):
+            return
+        
+        user_id = update.effective_user.id
+        
+        try:
+            stats = self.risk_manager.get_daily_stats(user_id)
+            
+            if 'error' in stats:
+                await update.message.reply_text(f"❌ Error: {stats['error']}")
+                return
+            
+            msg = MessageFormatter.daily_stats(stats)
+            
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            logger.info(f"Stats command executed for user {mask_user_id(user_id)}")
+            
+        except asyncio.CancelledError:
+            logger.info(f"Stats command cancelled for user {mask_user_id(user_id)}")
+            raise
+        except RetryAfter as e:
+            logger.warning(f"Rate limit in stats command: retry after {e.retry_after}s")
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"Network/timeout error in stats command: {e}")
+        except TelegramError as e:
+            logger.error(f"Telegram error in stats command: {e}")
+            try:
+                await update.message.reply_text("❌ Error mengambil statistik.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+        except Exception as e:
+            logger.error(f"Unexpected error in stats command: {type(e).__name__}: {e}")
+            try:
+                await update.message.reply_text("❌ Error mengambil statistik.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
     
     async def analytics_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_authorized(update.effective_user.id):
@@ -2858,6 +2899,7 @@ class TradingBot:
         self.app.add_handler(CommandHandler("status", self.status_command))
         self.app.add_handler(CommandHandler("riwayat", self.riwayat_command))
         self.app.add_handler(CommandHandler("performa", self.performa_command))
+        self.app.add_handler(CommandHandler("stats", self.stats_command))
         self.app.add_handler(CommandHandler("analytics", self.analytics_command))
         self.app.add_handler(CommandHandler("systemhealth", self.systemhealth_command))
         self.app.add_handler(CommandHandler("tasks", self.tasks_command))

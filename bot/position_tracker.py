@@ -9,6 +9,7 @@ from telegram.error import TimedOut
 from bot.logger import setup_logger
 from bot.database import Position, Trade
 from bot.signal_session_manager import SignalSessionManager
+from bot.message_templates import MessageFormatter
 
 logger = setup_logger('PositionTracker')
 
@@ -1308,16 +1309,25 @@ class PositionTracker:
                         if chart_path and self.signal_session_manager:
                             await self.signal_session_manager.update_session(user_id, chart_path=chart_path)
                         
-                        result_emoji = '✅' if trade_result == 'WIN' else '❌'
-                        exit_label = "TRADE_EXIT" if reason == "TP_HIT" else "Trade LOSS"
+                        opened_at = pos.get('opened_at')
+                        if opened_at:
+                            if isinstance(opened_at, datetime):
+                                duration_seconds = (datetime.now(pytz.UTC) - opened_at).total_seconds()
+                            else:
+                                duration_seconds = 0
+                        else:
+                            duration_seconds = 0
                         
-                        exit_msg = (
-                            f"{result_emoji} *{exit_label}*\n\n"
-                            f"Type: {signal_type}\n"
-                            f"Entry: ${entry_price:.2f}\n"
-                            f"Exit: ${exit_price:.2f}\n"
-                            f"P/L: ${actual_pl:.2f}"
-                        )
+                        exit_data = {
+                            'result': trade_result,
+                            'signal_type': signal_type,
+                            'entry_price': entry_price,
+                            'exit_price': exit_price,
+                            'actual_pl': actual_pl,
+                            'reason': reason,
+                            'duration': duration_seconds
+                        }
+                        exit_msg = MessageFormatter.trade_exit(exit_data, pip_value=self.config.XAUUSD_PIP_VALUE)
                         
                         try:
                             await asyncio.wait_for(
@@ -1337,7 +1347,9 @@ class PositionTracker:
                         except asyncio.TimeoutError:
                             logger.error(f"Failed to send exit notification to user {user_id}: asyncio.TimeoutError after 10s")
                             try:
-                                simple_msg = f"{result_emoji} {exit_label}\nType: {signal_type}\nEntry: ${entry_price:.2f}\nExit: ${exit_price:.2f}\nP/L: ${actual_pl:.2f}"
+                                result_emoji = '✅' if trade_result == 'WIN' else '❌'
+                                pl_text = f"+${actual_pl:.2f}" if actual_pl >= 0 else f"-${abs(actual_pl):.2f}"
+                                simple_msg = f"{result_emoji} TRADE CLOSED\nEntry: ${entry_price:.2f}\nExit: ${exit_price:.2f}\nP/L: {pl_text}"
                                 await asyncio.wait_for(
                                     self.telegram_app.bot.send_message(chat_id=user_id, text=simple_msg),
                                     timeout=5.0
@@ -1348,7 +1360,9 @@ class PositionTracker:
                         except TimedOut as telegram_err:
                             logger.error(f"Failed to send exit notification to user {user_id}: telegram.error.TimedOut")
                             try:
-                                simple_msg = f"{result_emoji} {exit_label}\nType: {signal_type}\nEntry: ${entry_price:.2f}\nExit: ${exit_price:.2f}\nP/L: ${actual_pl:.2f}"
+                                result_emoji = '✅' if trade_result == 'WIN' else '❌'
+                                pl_text = f"+${actual_pl:.2f}" if actual_pl >= 0 else f"-${abs(actual_pl):.2f}"
+                                simple_msg = f"{result_emoji} TRADE CLOSED\nEntry: ${entry_price:.2f}\nExit: ${exit_price:.2f}\nP/L: {pl_text}"
                                 await asyncio.wait_for(
                                     self.telegram_app.bot.send_message(chat_id=user_id, text=simple_msg),
                                     timeout=5.0

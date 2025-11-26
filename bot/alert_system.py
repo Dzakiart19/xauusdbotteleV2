@@ -10,6 +10,7 @@ import pytz
 from bot.logger import setup_logger
 from bot.database import Trade, Position
 from bot.resilience import RateLimiter, CircuitBreaker
+from bot.message_templates import MessageFormatter
 
 logger = setup_logger('AlertSystem')
 
@@ -401,16 +402,17 @@ class AlertSystem:
         await self.send_alert(alert)
     
     async def send_trade_exit_alert(self, trade_data: Dict, result: str):
-        result_emoji = '✅' if result == 'WIN' else '❌'
-        pl_value = trade_data.get('actual_pl', 0)
+        exit_data = {
+            'result': result,
+            'signal_type': trade_data['signal_type'],
+            'entry_price': trade_data['entry_price'],
+            'exit_price': trade_data.get('exit_price', 0),
+            'actual_pl': trade_data.get('actual_pl', 0),
+            'reason': trade_data.get('reason', 'CLOSED'),
+            'duration': trade_data.get('duration', 0)
+        }
         
-        message = (
-            f"{result_emoji} *Trade {result}*\n\n"
-            f"Type: {trade_data['signal_type']}\n"
-            f"Entry: ${trade_data['entry_price']:.2f}\n"
-            f"Exit: ${trade_data.get('exit_price', 0):.2f}\n"
-            f"P/L: ${pl_value:.2f}"
-        )
+        message = MessageFormatter.trade_exit(exit_data)
         
         priority = 'HIGH' if result == 'WIN' else 'NORMAL'
         

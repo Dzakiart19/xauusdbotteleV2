@@ -127,7 +127,6 @@ class IndicatorEngine:
     def __init__(self, config):
         self.config = config
         self.ema_periods = config.EMA_PERIODS
-        self.ema_periods_long = config.EMA_PERIODS_LONG
         self.rsi_period = config.RSI_PERIOD
         self.stoch_k_period = config.STOCH_K_PERIOD
         self.stoch_d_period = config.STOCH_D_PERIOD
@@ -449,8 +448,7 @@ class IndicatorEngine:
         if not self._validate_dataframe(df, ['open', 'high', 'low', 'close']):
             return None
         
-        all_periods = self.ema_periods + self.ema_periods_long
-        min_required = max(30, max(all_periods + [self.rsi_period, self.stoch_k_period, self.atr_period]) + 10)
+        min_required = max(30, max(self.ema_periods + [self.rsi_period, self.stoch_k_period, self.atr_period]) + 10)
         
         if len(df) < min_required:
             return None
@@ -458,10 +456,6 @@ class IndicatorEngine:
         indicators = {}
         
         for period in self.ema_periods:
-            ema_series = self.calculate_ema(df, period)
-            indicators[f'ema_{period}'] = safe_series_operation(ema_series, 'value', -1, 0.0)
-        
-        for period in self.ema_periods_long:
             ema_series = self.calculate_ema(df, period)
             indicators[f'ema_{period}'] = safe_series_operation(ema_series, 'value', -1, 0.0)
         
@@ -521,3 +515,312 @@ class IndicatorEngine:
         indicators['low'] = safe_series_operation(low_series, 'value', -1, 0.0)
         
         return indicators
+    
+    def calculate_vwap(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Calculate Volume Weighted Average Price (VWAP).
+        
+        VWAP = cumsum(typical_price * volume) / cumsum(volume)
+        typical_price = (high + low + close) / 3
+        
+        Args:
+            df: DataFrame with OHLCV data
+        
+        Returns:
+            pd.Series: VWAP values
+        """
+        if not self._validate_dataframe(df, ['high', 'low', 'close', 'volume']):
+            return pd.Series([0.0])
+        
+        high = self._get_column_series(df, 'high')
+        low = self._get_column_series(df, 'low')
+        close = self._get_column_series(df, 'close')
+        volume = self._get_column_series(df, 'volume')
+        
+        if len(df) < 1:
+            return pd.Series([0.0])
+        
+        typical_price = (high + low + close) / 3
+        typical_price = typical_price.fillna(close)
+        
+        tp_volume = typical_price * volume
+        tp_volume = tp_volume.fillna(0.0)
+        
+        has_date_index = False
+        try:
+            if isinstance(df.index, pd.DatetimeIndex):
+                has_date_index = True
+            elif 'time' in df.columns:
+                df_time = pd.to_datetime(df['time'], errors='coerce')
+                if not df_time.isna().all():
+                    has_date_index = True
+        except Exception:
+            has_date_index = False
+        
+        if has_date_index:
+            try:
+                if isinstance(df.index, pd.DatetimeIndex):
+                    date_series = df.index.date
+                else:
+                    date_series = pd.to_datetime(df['time']).dt.date
+                
+                vwap = pd.Series(index=df.index, dtype=float)
+                
+                for date in pd.Series(date_series).unique():
+                    mask = date_series == date
+                    if isinstance(mask, np.ndarray):
+                        mask = pd.Series(mask, index=df.index)
+                    
+                    cum_tp_vol = tp_volume[mask].cumsum()
+                    cum_vol = volume[mask].cumsum()
+                    
+                    daily_vwap = safe_divide(cum_tp_vol, cum_vol, fill_value=typical_price[mask].iloc[-1] if len(typical_price[mask]) > 0 else 0.0)
+                    vwap.loc[mask] = daily_vwap.values
+                
+                vwap = vwap.fillna(typical_price)
+                return pd.Series(vwap)
+            except Exception:
+                pass
+        
+        rolling_period = 20
+        if len(df) < rolling_period:
+            rolling_period = len(df)
+        
+        cum_tp_vol = tp_volume.rolling(window=rolling_period, min_periods=1).sum()
+        cum_vol = volume.rolling(window=rolling_period, min_periods=1).sum()
+        
+        vwap = safe_divide(cum_tp_vol, cum_vol, fill_value=0.0)
+        vwap = vwap.fillna(typical_price)
+        
+        return pd.Series(vwap)
+    
+    def detect_candlestick_patterns(self, df: pd.DataFrame) -> Dict[str, bool]:
+        """
+        Detect candlestick patterns from the last candle.
+        
+        Patterns detected:
+        - Pinbar (bullish/bearish): small body (<30% range), long wick (>60% range)
+        - Hammer/Inverted Hammer: small body, lower/upper wick > 2x body
+        - Engulfing (bullish/bearish): current candle engulfs previous
+        
+        Args:
+            df: DataFrame with OHLC data
+        
+        Returns:
+            Dict with pattern detection results
+        """
+        default_result = {
+            'bullish_pinbar': False,
+            'bearish_pinbar': False,
+            'hammer': False,
+            'inverted_hammer': False,
+            'bullish_engulfing': False,
+            'bearish_engulfing': False
+        }
+        
+        if not self._validate_dataframe(df, ['open', 'high', 'low', 'close']):
+            return default_result
+        
+        if len(df) < 2:
+            return default_result
+        
+        try:
+            open_curr = float(df['open'].iloc[-1]) if not pd.isna(df['open'].iloc[-1]) else 0.0
+            high_curr = float(df['high'].iloc[-1]) if not pd.isna(df['high'].iloc[-1]) else 0.0
+            low_curr = float(df['low'].iloc[-1]) if not pd.isna(df['low'].iloc[-1]) else 0.0
+            close_curr = float(df['close'].iloc[-1]) if not pd.isna(df['close'].iloc[-1]) else 0.0
+            
+            open_prev = float(df['open'].iloc[-2]) if not pd.isna(df['open'].iloc[-2]) else 0.0
+            high_prev = float(df['high'].iloc[-2]) if not pd.isna(df['high'].iloc[-2]) else 0.0
+            low_prev = float(df['low'].iloc[-2]) if not pd.isna(df['low'].iloc[-2]) else 0.0
+            close_prev = float(df['close'].iloc[-2]) if not pd.isna(df['close'].iloc[-2]) else 0.0
+        except (IndexError, KeyError, TypeError):
+            return default_result
+        
+        total_range = high_curr - low_curr
+        if total_range <= 0:
+            total_range = 1e-10
+        
+        body = abs(close_curr - open_curr)
+        body_pct = body / total_range
+        
+        is_bullish = close_curr > open_curr
+        body_top = max(open_curr, close_curr)
+        body_bottom = min(open_curr, close_curr)
+        upper_wick = high_curr - body_top
+        lower_wick = body_bottom - low_curr
+        
+        result = default_result.copy()
+        
+        if body_pct < 0.30:
+            upper_wick_pct = upper_wick / total_range
+            lower_wick_pct = lower_wick / total_range
+            
+            if lower_wick_pct > 0.60:
+                result['bullish_pinbar'] = True
+            if upper_wick_pct > 0.60:
+                result['bearish_pinbar'] = True
+        
+        body_size = body if body > 0 else 1e-10
+        
+        if body_pct < 0.35 and lower_wick > 2 * body_size and upper_wick < body_size:
+            result['hammer'] = True
+        
+        if body_pct < 0.35 and upper_wick > 2 * body_size and lower_wick < body_size:
+            result['inverted_hammer'] = True
+        
+        prev_is_bearish = close_prev < open_prev
+        prev_is_bullish = close_prev > open_prev
+        
+        if is_bullish and prev_is_bearish:
+            if close_curr > open_prev and open_curr < close_prev:
+                result['bullish_engulfing'] = True
+        
+        if not is_bullish and prev_is_bullish:
+            if close_curr < open_prev and open_curr > close_prev:
+                result['bearish_engulfing'] = True
+        
+        return result
+    
+    def calculate_micro_support_resistance(self, df: pd.DataFrame, lookback: int = 20) -> Dict:
+        """
+        Calculate micro support and resistance levels from swing highs/lows.
+        
+        Args:
+            df: DataFrame with OHLC data
+            lookback: Number of candles to look back for swing detection
+        
+        Returns:
+            Dict with support/resistance levels:
+            - nearest_support: Closest support below current price
+            - nearest_resistance: Closest resistance above current price
+            - support_levels: List of support levels
+            - resistance_levels: List of resistance levels
+        """
+        default_result = {
+            'nearest_support': 0.0,
+            'nearest_resistance': 0.0,
+            'support_levels': [],
+            'resistance_levels': []
+        }
+        
+        if not self._validate_dataframe(df, ['high', 'low', 'close']):
+            return default_result
+        
+        if len(df) < 5:
+            return default_result
+        
+        try:
+            high = self._get_column_series(df, 'high')
+            low = self._get_column_series(df, 'low')
+            close = self._get_column_series(df, 'close')
+            
+            current_price = float(close.iloc[-1]) if not pd.isna(close.iloc[-1]) else 0.0
+            
+            actual_lookback = min(lookback, len(df))
+            df_subset = df.tail(actual_lookback)
+            high_subset = high.tail(actual_lookback)
+            low_subset = low.tail(actual_lookback)
+            
+            swing_highs = []
+            swing_lows = []
+            
+            for i in range(2, len(df_subset) - 2):
+                high_val = float(high_subset.iloc[i]) if not pd.isna(high_subset.iloc[i]) else 0.0
+                high_prev1 = float(high_subset.iloc[i-1]) if not pd.isna(high_subset.iloc[i-1]) else 0.0
+                high_prev2 = float(high_subset.iloc[i-2]) if not pd.isna(high_subset.iloc[i-2]) else 0.0
+                high_next1 = float(high_subset.iloc[i+1]) if not pd.isna(high_subset.iloc[i+1]) else 0.0
+                high_next2 = float(high_subset.iloc[i+2]) if not pd.isna(high_subset.iloc[i+2]) else 0.0
+                
+                if high_val > high_prev1 and high_val > high_prev2 and high_val > high_next1 and high_val > high_next2:
+                    swing_highs.append(high_val)
+                
+                low_val = float(low_subset.iloc[i]) if not pd.isna(low_subset.iloc[i]) else 0.0
+                low_prev1 = float(low_subset.iloc[i-1]) if not pd.isna(low_subset.iloc[i-1]) else 0.0
+                low_prev2 = float(low_subset.iloc[i-2]) if not pd.isna(low_subset.iloc[i-2]) else 0.0
+                low_next1 = float(low_subset.iloc[i+1]) if not pd.isna(low_subset.iloc[i+1]) else 0.0
+                low_next2 = float(low_subset.iloc[i+2]) if not pd.isna(low_subset.iloc[i+2]) else 0.0
+                
+                if low_val < low_prev1 and low_val < low_prev2 and low_val < low_next1 and low_val < low_next2:
+                    swing_lows.append(low_val)
+            
+            if not swing_lows:
+                swing_lows.append(float(low_subset.min()))
+            if not swing_highs:
+                swing_highs.append(float(high_subset.max()))
+            
+            swing_highs = sorted(list(set(swing_highs)))
+            swing_lows = sorted(list(set(swing_lows)))
+            
+            resistance_levels = [h for h in swing_highs if h > current_price]
+            support_levels = [l for l in swing_lows if l < current_price]
+            
+            nearest_resistance = min(resistance_levels) if resistance_levels else (max(swing_highs) if swing_highs else current_price * 1.01)
+            nearest_support = max(support_levels) if support_levels else (min(swing_lows) if swing_lows else current_price * 0.99)
+            
+            return {
+                'nearest_support': float(nearest_support),
+                'nearest_resistance': float(nearest_resistance),
+                'support_levels': [float(s) for s in sorted(support_levels, reverse=True)[:5]],
+                'resistance_levels': [float(r) for r in sorted(resistance_levels)[:5]]
+            }
+            
+        except Exception:
+            return default_result
+    
+    def calculate_volume_confirmation(self, df: pd.DataFrame, period: int = 10) -> Dict:
+        """
+        Calculate volume confirmation indicators.
+        
+        Args:
+            df: DataFrame with volume data
+            period: Period for volume average calculation (default: 10)
+        
+        Returns:
+            Dict with volume analysis:
+            - volume_current: Current volume
+            - volume_avg: Average volume over period
+            - is_volume_strong: True if current volume > average
+            - volume_ratio: Current volume / Average volume
+        """
+        default_result = {
+            'volume_current': 0.0,
+            'volume_avg': 0.0,
+            'is_volume_strong': False,
+            'volume_ratio': 1.0
+        }
+        
+        if not self._validate_dataframe(df, ['volume']):
+            return default_result
+        
+        if len(df) < 1:
+            return default_result
+        
+        try:
+            volume = self._get_column_series(df, 'volume')
+            
+            current_volume = float(volume.iloc[-1]) if not pd.isna(volume.iloc[-1]) else 0.0
+            
+            actual_period = min(period, len(df))
+            if actual_period < 1:
+                actual_period = 1
+            
+            volume_avg_series = volume.rolling(window=actual_period, min_periods=1).mean()
+            volume_avg = float(volume_avg_series.iloc[-1]) if not pd.isna(volume_avg_series.iloc[-1]) else 0.0
+            
+            if volume_avg > 0:
+                volume_ratio = current_volume / volume_avg
+            else:
+                volume_ratio = 1.0
+            
+            is_volume_strong = current_volume > volume_avg
+            
+            return {
+                'volume_current': float(current_volume),
+                'volume_avg': float(volume_avg),
+                'is_volume_strong': bool(is_volume_strong),
+                'volume_ratio': float(volume_ratio)
+            }
+            
+        except Exception:
+            return default_result

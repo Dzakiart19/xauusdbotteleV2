@@ -224,8 +224,7 @@ class Config:
     TICK_LOG_SAMPLE_RATE = _get_int_env('TICK_LOG_SAMPLE_RATE', '30')
     AUTHORIZED_USER_IDS = _parse_user_ids(os.getenv('AUTHORIZED_USER_IDS', ''))
     ID_USER_PUBLIC = _parse_user_ids(os.getenv('ID_USER_PUBLIC', ''))
-    EMA_PERIODS = _parse_int_list(os.getenv('EMA_PERIODS', '5,10,20'), [5, 10, 20])
-    EMA_PERIODS_LONG = _parse_int_list(os.getenv('EMA_PERIODS_LONG', '50'), [50])
+    EMA_PERIODS = _parse_int_list(os.getenv('EMA_PERIODS', '5,20,50'), [5, 20, 50])
     
     MEMORY_WARNING_THRESHOLD_MB = _get_int_env('MEMORY_WARNING_THRESHOLD_MB', '400')
     MEMORY_CRITICAL_THRESHOLD_MB = _get_int_env('MEMORY_CRITICAL_THRESHOLD_MB', '450')
@@ -282,14 +281,6 @@ class Config:
             if err:
                 errors.append(err)
         
-        err = _validate_list_not_empty(cls.EMA_PERIODS_LONG, "EMA_PERIODS_LONG")
-        if err:
-            errors.append(err)
-        else:
-            err = _validate_list_items_type(cls.EMA_PERIODS_LONG, int, "EMA_PERIODS_LONG")
-            if err:
-                errors.append(err)
-        
         if cls.TELEGRAM_WEBHOOK_MODE:
             if not cls.WEBHOOK_URL or cls.WEBHOOK_URL.strip() == '':
                 warnings.append("TELEGRAM_WEBHOOK_MODE is enabled but WEBHOOK_URL is not set - will attempt auto-detection")
@@ -320,6 +311,14 @@ class Config:
         if err:
             errors.append(err)
         
+        err = _validate_positive(cls.MIN_SL_PIPS, "MIN_SL_PIPS")
+        if err:
+            errors.append(err)
+        
+        err = _validate_positive(cls.MIN_SL_SPREAD_MULTIPLIER, "MIN_SL_SPREAD_MULTIPLIER")
+        if err:
+            errors.append(err)
+        
         err = _validate_positive(cls.DEFAULT_SL_PIPS, "DEFAULT_SL_PIPS")
         if err:
             errors.append(err)
@@ -342,6 +341,17 @@ class Config:
         
         if cls.RSI_OVERSOLD_LEVEL >= cls.RSI_OVERBOUGHT_LEVEL:
             errors.append(f"RSI_OVERSOLD_LEVEL ({cls.RSI_OVERSOLD_LEVEL}) must be less than RSI_OVERBOUGHT_LEVEL ({cls.RSI_OVERBOUGHT_LEVEL})")
+        
+        err = _validate_range(cls.RSI_ENTRY_MIN, 0, 100, "RSI_ENTRY_MIN")
+        if err:
+            errors.append(err)
+        
+        err = _validate_range(cls.RSI_ENTRY_MAX, 0, 100, "RSI_ENTRY_MAX")
+        if err:
+            errors.append(err)
+        
+        if cls.RSI_ENTRY_MIN >= cls.RSI_ENTRY_MAX:
+            errors.append(f"RSI_ENTRY_MIN ({cls.RSI_ENTRY_MIN}) must be less than RSI_ENTRY_MAX ({cls.RSI_ENTRY_MAX})")
         
         err = _validate_positive(cls.ATR_PERIOD, "ATR_PERIOD")
         if err:
@@ -376,6 +386,45 @@ class Config:
         
         if cls.MEMORY_WARNING_THRESHOLD_MB >= cls.MEMORY_CRITICAL_THRESHOLD_MB:
             warnings.append(f"MEMORY_WARNING_THRESHOLD_MB ({cls.MEMORY_WARNING_THRESHOLD_MB}) should be less than MEMORY_CRITICAL_THRESHOLD_MB ({cls.MEMORY_CRITICAL_THRESHOLD_MB})")
+        
+        err = _validate_positive(cls.VOLUME_AVG_PERIOD, "VOLUME_AVG_PERIOD")
+        if err:
+            errors.append(err)
+        
+        err = _validate_positive(cls.VOLUME_THRESHOLD_MULTIPLIER, "VOLUME_THRESHOLD_MULTIPLIER")
+        if err:
+            errors.append(err)
+        
+        err = _validate_range(cls.TRADING_HOURS_START, 0, 23, "TRADING_HOURS_START")
+        if err:
+            errors.append(err)
+        
+        err = _validate_range(cls.TRADING_HOURS_END, 0, 23, "TRADING_HOURS_END")
+        if err:
+            errors.append(err)
+        
+        if cls.TRADING_HOURS_START >= cls.TRADING_HOURS_END:
+            warnings.append(f"TRADING_HOURS_START ({cls.TRADING_HOURS_START}) should be less than TRADING_HOURS_END ({cls.TRADING_HOURS_END})")
+        
+        err = _validate_range(cls.FRIDAY_CUTOFF_HOUR, 0, 23, "FRIDAY_CUTOFF_HOUR")
+        if err:
+            errors.append(err)
+        
+        err = _validate_positive(cls.NEWS_AVOID_MINUTES_BEFORE, "NEWS_AVOID_MINUTES_BEFORE", allow_zero=True)
+        if err:
+            errors.append(err)
+        
+        err = _validate_positive(cls.NEWS_AVOID_MINUTES_AFTER, "NEWS_AVOID_MINUTES_AFTER", allow_zero=True)
+        if err:
+            errors.append(err)
+        
+        err = _validate_positive(cls.ACCOUNT_BALANCE, "ACCOUNT_BALANCE")
+        if err:
+            errors.append(err)
+        
+        valid_timeframes = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN']
+        if cls.MTF_CONFIRMATION_TIMEFRAME not in valid_timeframes:
+            errors.append(f"MTF_CONFIRMATION_TIMEFRAME must be one of {valid_timeframes}, got {cls.MTF_CONFIRMATION_TIMEFRAME}")
         
         if warnings:
             try:
@@ -427,7 +476,9 @@ class Config:
     RSI_PERIOD = _get_int_env('RSI_PERIOD', '14')
     RSI_OVERSOLD_LEVEL = _get_int_env('RSI_OVERSOLD_LEVEL', '30')
     RSI_OVERBOUGHT_LEVEL = _get_int_env('RSI_OVERBOUGHT_LEVEL', '70')
-    STOCH_K_PERIOD = _get_int_env('STOCH_K_PERIOD', '14')
+    RSI_ENTRY_MIN = _get_int_env('RSI_ENTRY_MIN', '35')
+    RSI_ENTRY_MAX = _get_int_env('RSI_ENTRY_MAX', '65')
+    STOCH_K_PERIOD = _get_int_env('STOCH_K_PERIOD', '8')
     STOCH_D_PERIOD = _get_int_env('STOCH_D_PERIOD', '3')
     STOCH_SMOOTH_K = _get_int_env('STOCH_SMOOTH_K', '3')
     STOCH_OVERSOLD_LEVEL = _get_int_env('STOCH_OVERSOLD_LEVEL', '20')
@@ -436,10 +487,13 @@ class Config:
     MACD_FAST = _get_int_env('MACD_FAST', '12')
     MACD_SLOW = _get_int_env('MACD_SLOW', '26')
     MACD_SIGNAL = _get_int_env('MACD_SIGNAL', '9')
-    VOLUME_THRESHOLD_MULTIPLIER = _get_float_env('VOLUME_THRESHOLD_MULTIPLIER', '0.5')
-    MAX_SPREAD_PIPS = _get_float_env('MAX_SPREAD_PIPS', '10.0')
+    VOLUME_AVG_PERIOD = _get_int_env('VOLUME_AVG_PERIOD', '10')
+    VOLUME_THRESHOLD_MULTIPLIER = _get_float_env('VOLUME_THRESHOLD_MULTIPLIER', '1.0')
+    MAX_SPREAD_PIPS = _get_float_env('MAX_SPREAD_PIPS', '15.0')
     
-    SL_ATR_MULTIPLIER = _get_float_env('SL_ATR_MULTIPLIER', '1.0')
+    SL_ATR_MULTIPLIER = _get_float_env('SL_ATR_MULTIPLIER', '1.2')
+    MIN_SL_PIPS = _get_float_env('MIN_SL_PIPS', '15.0')
+    MIN_SL_SPREAD_MULTIPLIER = _get_float_env('MIN_SL_SPREAD_MULTIPLIER', '2.0')
     DEFAULT_SL_PIPS = _get_float_env('DEFAULT_SL_PIPS', '20.0')
     TP_RR_RATIO = _get_float_env('TP_RR_RATIO', '1.5')
     DEFAULT_TP_PIPS = _get_float_env('DEFAULT_TP_PIPS', '30.0')
@@ -447,7 +501,7 @@ class Config:
     SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '30')
     MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '999999')
     DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '3.0')
-    RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '0.5')
+    RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '1.0')
     FIXED_RISK_AMOUNT = _get_float_env('FIXED_RISK_AMOUNT', '1.0')
     
     DYNAMIC_SL_LOSS_THRESHOLD = _get_float_env('DYNAMIC_SL_LOSS_THRESHOLD', '1.0')
@@ -467,6 +521,18 @@ class Config:
     DRY_RUN = os.getenv('DRY_RUN', 'false').lower() == 'true'
     
     HEALTH_CHECK_PORT = _get_int_env('PORT', '8080')
+    
+    TRADING_HOURS_START = _get_int_env('TRADING_HOURS_START', '7')
+    TRADING_HOURS_END = _get_int_env('TRADING_HOURS_END', '21')
+    FRIDAY_CUTOFF_HOUR = _get_int_env('FRIDAY_CUTOFF_HOUR', '20')
+    NEWS_AVOID_MINUTES_BEFORE = _get_int_env('NEWS_AVOID_MINUTES_BEFORE', '5')
+    NEWS_AVOID_MINUTES_AFTER = _get_int_env('NEWS_AVOID_MINUTES_AFTER', '10')
+    
+    MTF_ENABLED = os.getenv('MTF_ENABLED', 'true').lower() == 'true'
+    MTF_CONFIRMATION_TIMEFRAME = os.getenv('MTF_CONFIRMATION_TIMEFRAME', 'M15')
+    
+    ACCOUNT_BALANCE = _get_float_env('ACCOUNT_BALANCE', '15000')
+    ACCOUNT_CURRENCY = os.getenv('ACCOUNT_CURRENCY', 'IDR')
     
     XAUUSD_PIP_VALUE = 10.0
     LOT_SIZE = 0.01

@@ -2,12 +2,16 @@ import asyncio
 import signal
 import sys
 import os
+import fcntl
+import atexit
 from aiohttp import web
 from typing import Optional, Dict, Set, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 from sqlalchemy import text
+
+LOCK_FILE_PATH = '/tmp/xauusd_trading_bot.lock'
 
 from config import Config, ConfigError
 from bot.logger import setup_logger, mask_token, sanitize_log_message
@@ -61,12 +65,84 @@ class TaskInfo:
         return self.task.cancelled()
 
 
+class SingleInstanceLock:
+    """Prevent multiple bot instances from running simultaneously using file lock"""
+    
+    def __init__(self, lock_file_path: str = LOCK_FILE_PATH):
+        self.lock_file_path = lock_file_path
+        self.lock_file = None
+        self.acquired = False
+    
+    def acquire(self) -> bool:
+        """Try to acquire exclusive lock on the lock file
+        
+        Returns:
+            True if lock acquired successfully, False if another instance is running
+        """
+        try:
+            self.lock_file = open(self.lock_file_path, 'w')
+            fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            self.lock_file.write(f"{os.getpid()}\n")
+            self.lock_file.write(f"{datetime.now().isoformat()}\n")
+            self.lock_file.flush()
+            
+            self.acquired = True
+            atexit.register(self.release)
+            logger.info(f"Bot instance lock acquired (PID: {os.getpid()})")
+            return True
+            
+        except (IOError, OSError) as e:
+            if self.lock_file:
+                self.lock_file.close()
+            
+            existing_pid = "unknown"
+            try:
+                with open(self.lock_file_path, 'r') as f:
+                    existing_pid = f.readline().strip()
+            except (IOError, OSError):
+                pass
+            
+            logger.error(f"Failed to acquire bot lock - another instance may be running (PID: {existing_pid})")
+            return False
+    
+    def release(self):
+        """Release the lock file"""
+        if self.lock_file and self.acquired:
+            try:
+                fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
+                self.lock_file.close()
+                
+                if os.path.exists(self.lock_file_path):
+                    os.unlink(self.lock_file_path)
+                
+                self.acquired = False
+                logger.info("Bot instance lock released")
+            except (IOError, OSError) as e:
+                logger.error(f"Error releasing bot lock: {e}")
+    
+    def __enter__(self):
+        if not self.acquire():
+            raise RuntimeError("Failed to acquire bot instance lock - another instance may be running")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
+
+
 class TradingBotOrchestrator:
     SHUTDOWN_TOTAL_TIMEOUT = 30
     SHUTDOWN_PHASE_TIMEOUT = 8
     TASK_CANCEL_TIMEOUT = 5
     
     def __init__(self):
+        self.instance_lock = SingleInstanceLock()
+        if not self.instance_lock.acquire():
+            raise RuntimeError(
+                "Cannot start bot: Another instance is already running. "
+                "Check for zombie processes or wait for the other instance to terminate."
+            )
         self.config = Config()
         self.config_valid = False
         
@@ -988,6 +1064,14 @@ class TradingBotOrchestrator:
             raise
         finally:
             self._shutdown_in_progress = False
+            
+            if hasattr(self, 'instance_lock') and self.instance_lock:
+                try:
+                    logger.info("[SHUTDOWN] Releasing instance lock...")
+                    self.instance_lock.release()
+                    logger.info("[SHUTDOWN] Instance lock released ✓")
+                except Exception as e:
+                    logger.error(f"[SHUTDOWN] Error releasing instance lock: {e}")
 
 
 async def main():

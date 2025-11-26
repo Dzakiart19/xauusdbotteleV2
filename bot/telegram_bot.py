@@ -2797,7 +2797,7 @@ class TradingBot:
                 await update.message.reply_text("❌ Position tracker tidak tersedia.")
                 return
             
-            active_positions = self.position_tracker.get_active_positions(user_id)
+            active_positions = await self.position_tracker.get_active_positions_async(user_id)
             
             if not active_positions:
                 await update.message.reply_text(
@@ -2885,7 +2885,7 @@ class TradingBot:
                         parse_mode='Markdown'
                     )
                     return
-            elif self.position_tracker and self.position_tracker.has_active_position(user_id):
+            elif self.position_tracker and await self.position_tracker.has_active_position_async(user_id):
                 await update.message.reply_text(
                     "⏳ *Tidak Dapat Membuat Sinyal Baru*\n\n"
                     "Saat ini Anda memiliki posisi aktif yang sedang berjalan.\n"

@@ -28,7 +28,8 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Database:** SQLite for persistent data with PostgreSQL support, auto-migration, connection pooling, and robust transaction management.
 - **User Manager:** Handles user authentication and access control via `AUTHORIZED_USER_IDS` and `ID_USER_PUBLIC`.
 - **Resilience:** Implements CircuitBreaker for WebSocket, global rate limiting for Telegram API, retry mechanisms, and advanced WebSocket recovery with exponential backoff.
-- **System Health:** Includes port conflict detection, bot instance locking, Sentry integration, comprehensive health checks, and OOM graceful degradation.
+- **System Health:** Includes port conflict detection, bot instance locking (file-based flock), Sentry integration, comprehensive health checks, and OOM graceful degradation.
+- **Thread Safety:** Implements asyncio.Lock for position tracking, signal session management, and atomic command execution to prevent race conditions.
 
 **UI/UX Decisions:**
 - Telegram serves as the primary user interface.

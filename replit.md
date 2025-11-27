@@ -64,7 +64,16 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
-- **2025-11-27 (CURRENT):** ENHANCED 3-TIER FALLBACK CASCADE FOR KOYEB STABILITY:
+- **2025-11-27 (CURRENT):** KOYEB DEPLOYMENT OPTIMIZATION:
+  - **requirements.txt cleanup:** Removed all duplicate packages (35→17 entries) for cleaner builds
+  - **Dockerfile enhanced for chart rendering:**
+    - Added fonts: `fonts-dejavu-core`, `fonts-liberation`, `fontconfig` 
+    - Added font cache refresh: `fc-cache -fv`
+    - Added explicit `MPLBACKEND=Agg` environment variable
+    - Added `FONTCONFIG_PATH=/etc/fonts` for font discovery
+  - **Problem solved:** Charts now render clearly in Koyeb without font warnings
+  - **Port configuration:** Uses `PORT` env var (Koyeb sets this automatically), defaults to 8080
+- **2025-11-27:** ENHANCED 3-TIER FALLBACK CASCADE FOR KOYEB STABILITY:
   - **Tier 1 (WebSocket):** Fresh data (<30s) - primary source, lowest latency
   - **Tier 2 (HTTP Fallback):** `fetch_price_via_http()` with 2-second timeout and 10-second caching
   - **Tier 3 (Emergency):** M1 candle builder close price - guaranteed fallback when all else fails

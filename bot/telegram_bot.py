@@ -2185,11 +2185,11 @@ class TradingBot:
     async def stop_dashboard(self, user_id: int):
         """Stop dashboard monitoring dan cleanup task"""
         try:
-            if user_id not in self.active_dashboards:
+            dashboard = self.active_dashboards.pop(user_id, None)
+            if dashboard is None:
                 logger.debug(f"No active dashboard for user {mask_user_id(user_id)}")
                 return
             
-            dashboard = self.active_dashboards[user_id]
             task = dashboard.get('task')
             
             if task and not task.done():
@@ -2199,13 +2199,11 @@ class TradingBot:
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
             
-            del self.active_dashboards[user_id]
-            
             duration = (datetime.now(pytz.UTC) - dashboard['started_at']).total_seconds()
             logger.info(f"🛑 Dashboard stopped - User:{mask_user_id(user_id)} Duration:{duration:.1f}s")
             
-        except (asyncio.CancelledError, asyncio.TimeoutError, KeyError, ValueError, RuntimeError) as e:
-            logger.error(f"Error stopping dashboard for user {mask_user_id(user_id)}: {e}")
+        except (asyncio.CancelledError, asyncio.TimeoutError, ValueError, RuntimeError) as e:
+            logger.error(f"Error stopping dashboard for user {mask_user_id(user_id)}: {type(e).__name__}: {e}")
     
     async def _dashboard_update_loop(self, user_id: int, chat_id: int, position_id: int, message_id: int):
         """Loop update dashboard INSTANT dengan progress TP/SL real-time.

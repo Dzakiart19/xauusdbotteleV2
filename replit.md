@@ -64,7 +64,14 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
-- **2025-11-27 (CURRENT):** CRITICAL TP/SL BUG FIXES & MONITORING IMPROVEMENTS:
+- **2025-11-27 (CURRENT):** SESSION LIFECYCLE & SIGNAL BLOCKING FIX:
+  - Fixed critical bug: `close_position` now calls `signal_session_manager.end_session()` to allow new signals after position close
+  - Fixed monitoring loop: Optimized to recheck positions every 0.5s when blocked (not wait for global_cooldown)
+  - Fixed reentrant logging: Signal handler in main.py uses `loop.call_soon_threadsafe()` for thread-safe logging
+  - Fixed race condition: `stop_dashboard` uses `pop()` instead of `del` to avoid KeyError
+  - Fixed stale session update: Removed `update_session` call after `end_session` to prevent warning
+  - Verified working: Position closes → Session ends → Cache cleared → New signals ready immediately
+- **2025-11-27:** CRITICAL TP/SL BUG FIXES & MONITORING IMPROVEMENTS:
   - Fixed TP/SL close logic: Positions now properly close when reaching TP or SL targets
   - Added fallback price method in position monitoring: if get_current_price() fails, try get_last_candle('M1') 
   - Enhanced TP/SL detection logging for debugging: detailed log when conditions are met

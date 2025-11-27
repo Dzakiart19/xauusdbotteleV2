@@ -62,3 +62,6 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **aiohttp:** For asynchronous HTTP server and client operations.
 - **python-dotenv:** For managing environment variables.
 - **Sentry:** For advanced error tracking and monitoring.
+
+## Recent Changes
+- **2025-11-27:** Fixed undefined `ErrorHandlingError` exception class in `bot/error_handler.py` - removed 5 references to non-existent exception class that was causing LSP errors.

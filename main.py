@@ -1086,14 +1086,23 @@ async def main():
         
         if shutdown_requested:
             orchestrator._shutdown_count += 1
-            logger.warning(f"[SIGNAL] Received {signame} again (count: {orchestrator._shutdown_count})")
+            try:
+                loop.call_soon_threadsafe(
+                    lambda: logger.warning(f"[SIGNAL] Received {signame} again (count: {orchestrator._shutdown_count})")
+                )
+            except RuntimeError:
+                pass
             if orchestrator._shutdown_count >= 3:
-                logger.error("[SIGNAL] Forced exit after 3 signals")
                 sys.exit(1)
             return
         
         shutdown_requested = True
-        logger.info(f"[SIGNAL] Received {signame} ({sig}), initiating graceful shutdown...")
+        try:
+            loop.call_soon_threadsafe(
+                lambda: logger.info(f"[SIGNAL] Received {signame} ({sig}), initiating graceful shutdown...")
+            )
+        except RuntimeError:
+            pass
         
         try:
             loop.call_soon_threadsafe(orchestrator.shutdown_event.set)

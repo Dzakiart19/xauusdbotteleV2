@@ -1649,21 +1649,15 @@ class TradingBot:
                                 chat_id, 'auto', position_tracker=self.position_tracker
                             )
                             if not can_create:
-                                logger.debug(f"Skipping signal detection - {block_reason}")
-                                # Update both global and per-user cooldown bookkeeping to prevent tight loop
-                                self.global_last_signal_time = datetime.now()
-                                last_signal_check = datetime.now()
-                                # Sleep with global cooldown value to prevent tight loop
-                                await asyncio.sleep(self.global_signal_cooldown)
+                                logger.debug(f"⏸️ Signal blocked - {block_reason} | User:{mask_user_id(chat_id)} | Will recheck in 0.5s")
+                                await asyncio.sleep(0.5)
                                 continue
                         elif self.position_tracker.has_active_position(chat_id):
-                            logger.debug(f"Skipping signal detection - user already has active position")
-                            # Update both global and per-user cooldown bookkeeping to prevent tight loop
-                            self.global_last_signal_time = datetime.now()
-                            last_signal_check = datetime.now()
-                            # Sleep with global cooldown value to prevent tight loop
-                            await asyncio.sleep(self.global_signal_cooldown)
+                            logger.debug(f"⏸️ Signal blocked - active position exists | User:{mask_user_id(chat_id)} | Will recheck in 0.5s")
+                            await asyncio.sleep(0.5)
                             continue
+                        else:
+                            logger.debug(f"✅ No active position - ready for new signal | User:{mask_user_id(chat_id)}")
                         
                         current_price = await self.market_data.get_current_price()
                         spread_value = await self.market_data.get_spread()

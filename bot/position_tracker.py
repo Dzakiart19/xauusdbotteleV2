@@ -1312,6 +1312,14 @@ class PositionTracker:
             
             logger.info(f"Position closed - User:{user_id} ID:{position_id} {reason} P/L:${actual_pl:.2f}")
             
+            # End signal session to allow new signals
+            if self.signal_session_manager:
+                try:
+                    await self.signal_session_manager.end_session(user_id, reason)
+                    logger.info(f"✅ Signal session ended for user {user_id} - reason: {reason}")
+                except Exception as e:
+                    logger.error(f"❌ Error ending signal session for user {user_id}: {e}")
+            
             if self.telegram_app and self.chart_generator and self.market_data:
                 try:
                     df_m1 = await self.market_data.get_historical_data('M1', 100)
@@ -1327,8 +1335,8 @@ class PositionTracker:
                         
                         chart_path = await self.chart_generator.generate_chart_async(df_m1, exit_signal, 'M1')
                         
-                        if chart_path and self.signal_session_manager:
-                            await self.signal_session_manager.update_session(user_id, chart_path=chart_path)
+                        # Note: Session sudah diakhiri di atas, tidak perlu update chart_path ke session
+                        # Chart hanya digunakan untuk exit notification di bawah ini
                         
                         opened_at = pos.get('opened_at')
                         if opened_at:

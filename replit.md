@@ -64,6 +64,12 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
+- **2025-11-27:** CRITICAL BUG FIXES - Signal generation now working:
+  - Fixed circular dependency: `has_active_position` no longer checks `SignalSessionManager` (session != position)
+  - Fixed trend_strength calculation: Thresholds lowered 10x for scalping (EMA: 0.003→0.0005, MACD: 0.5→0.05, RSI: 0.4→0.1)
+  - Fixed min_trend_strength: Lowered from 0.20 to 0.05 for AUTO signals
+  - Removed duplicate session check in `_send_signal` that caused blocking
+  - Added `.gitignore` file for proper version control
 - **2025-11-27:** SCALPING MODE AGGRESSIVE - Major relaxation of signal filters:
   - Threshold score AUTO diturunkan dari 60% ke 30%
   - Threshold score MANUAL diturunkan dari 40% ke 20%

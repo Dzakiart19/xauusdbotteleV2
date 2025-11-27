@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from typing import Callable, Optional, Dict, List, Set, Any, Tuple
 import pytz
 from bot.logger import setup_logger
+from config import Config
 
 logger = setup_logger('TaskScheduler')
 
@@ -2106,11 +2107,13 @@ def setup_default_tasks(scheduler: TaskScheduler, bot_components: Dict):
         interval_seconds=300
     )
     
+    position_check_interval = 5 if Config.FREE_TIER_MODE else 10
     scheduler.add_interval_task(
         'position_monitoring',
         monitor_positions,
-        interval_seconds=10
+        interval_seconds=position_check_interval
     )
+    logger.info(f"Position monitoring interval: {position_check_interval}s (FREE_TIER_MODE={Config.FREE_TIER_MODE})")
     
     scheduler.add_interval_task(
         'periodic_gc',

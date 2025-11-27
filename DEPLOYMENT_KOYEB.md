@@ -383,6 +383,8 @@ FREE_TIER_MODE=true
 - ✅ Tick log sampling: 1 dari 30 ticks di-log (reduce I/O)
 - ✅ Database candle persistence: Instant startup, no API fetch
 - ✅ Webhook mode: Lebih efisien dari polling
+- ✅ **Position monitoring: 5 detik** (lebih agresif vs 10 detik normal)
+- ✅ **HTTP fallback untuk harga** (backup saat WebSocket tidak stabil)
 
 **2. Reduce Logging (Optional)**
 Untuk mengurangi I/O operations di free tier:

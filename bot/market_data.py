@@ -4,6 +4,7 @@ import websockets
 import json
 import math
 import time
+import aiohttp
 from datetime import datetime, timedelta
 from collections import deque
 from enum import Enum
@@ -684,6 +685,7 @@ class MarketDataClient:
         self.fetch_timeout = 10
         self.last_data_received = None
         self.data_stale_threshold = 60
+        self._http_price_cache: Optional[Tuple[datetime, float]] = None
         
         self._loading_from_db = False
         self._loaded_from_db = False
@@ -706,6 +708,32 @@ class MarketDataClient:
         logger.info("✅ Circuit breaker diinisialisasi untuk koneksi WebSocket (threshold=3, timeout=45s)")
         logger.info("✅ State machine koneksi diinisialisasi")
         logger.info("✅ Mekanisme candle close event diinisialisasi")
+    
+    async def fetch_price_via_http(self) -> Optional[float]:
+        """Fetch current price via HTTP REST API as fallback when WebSocket fails"""
+        try:
+            now = datetime.now()
+            if self._http_price_cache:
+                cached_time, cached_price = self._http_price_cache
+                if (now - cached_time).total_seconds() < 10:
+                    return cached_price
+            
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.deriv.com/api/1/ticks?ticks={self.symbol}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if 'tick' in data:
+                            tick = data['tick']
+                            price = float(tick.get('quote') or tick.get('bid'))
+                            if price and price > 0:
+                                self._http_price_cache = (now, price)
+                                logger.info(f"📡 HTTP fallback price: ${price:.2f}")
+                                return price
+            return None
+        except Exception as e:
+            logger.debug(f"HTTP price fetch failed: {e}")
+            return None
     
     async def _set_connection_state(self, new_state: ConnectionState):
         """Thread-safe state transition with logging"""
@@ -1768,16 +1796,27 @@ class MarketDataClient:
                 logger.debug(f"Raw message (truncated): {message[:500]}")
     
     async def get_current_price(self) -> Optional[float]:
-        """Get current mid price with validation"""
+        """Get current mid price with validation and HTTP fallback"""
         try:
-            if self.current_bid is not None and self.current_ask is not None:
+            data_is_fresh = False
+            if self.last_data_received:
+                time_since_last_data = (datetime.now() - self.last_data_received).total_seconds()
+                data_is_fresh = time_since_last_data < 30
+            
+            if data_is_fresh and self.current_bid is not None and self.current_ask is not None:
                 if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
                     if self.current_ask >= self.current_bid:
                         mid_price = (self.current_bid + self.current_ask) / 2.0
                         if is_valid_price(mid_price):
                             return mid_price
                     else:
-                        logger.warning(f"Invalid bid/ask for price calculation: bid={self.current_bid}, ask={self.current_ask}")
+                        logger.warning(f"Invalid bid/ask: bid={self.current_bid}, ask={self.current_ask}")
+            
+            if self.config.FREE_TIER_MODE or not data_is_fresh:
+                http_price = await self.fetch_price_via_http()
+                if http_price:
+                    logger.debug(f"Using HTTP fallback price: ${http_price:.2f} (WS stale)")
+                    return http_price
             
             logger.debug("No valid current price available")
             return None
@@ -1785,6 +1824,33 @@ class MarketDataClient:
         except Exception as e:
             logger.error(f"Error calculating current price: {e}")
             return None
+    
+    def is_websocket_healthy(self) -> bool:
+        """Check if WebSocket connection is healthy and receiving data"""
+        if not self.connected or not self.running:
+            return False
+        
+        if self.last_data_received is None:
+            return False
+        
+        time_since_last_data = (datetime.now() - self.last_data_received).total_seconds()
+        return time_since_last_data < 30
+
+    def get_connection_health(self) -> dict:
+        """Get detailed connection health status"""
+        time_since_last_data = None
+        if self.last_data_received:
+            time_since_last_data = (datetime.now() - self.last_data_received).total_seconds()
+        
+        return {
+            'connected': self.connected,
+            'running': self.running,
+            'websocket_healthy': self.is_websocket_healthy(),
+            'last_data_received': self.last_data_received.isoformat() if self.last_data_received else None,
+            'seconds_since_last_data': time_since_last_data,
+            'connection_state': self._connection_state.value,
+            'reconnect_attempts': self.reconnect_attempts
+        }
     
     async def get_bid_ask(self) -> Optional[Tuple[float, float]]:
         """Get current bid/ask with validation"""

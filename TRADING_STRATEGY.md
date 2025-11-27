@@ -1,8 +1,38 @@
-# 📊 STRATEGI TRADING BOT - Scalping M1/M5 (UPGRADED V3.0)
+# 📊 STRATEGI TRADING BOT - Scalping M1/M5 (UPGRADED V4.0)
 
-## 🎯 Strategi Baru: MACD + EMA + RSI Scalping (Proven Profitable)
+## 🎯 Strategi: MACD + EMA + RSI Scalping + Anti-Sideways Filters
 
-Bot ini sekarang menggunakan **strategi open source yang terbukti profitable**, dengan MACD sebagai konfirmasi utama, pemisahan jelas antara **sinyal otomatis** dan **sinyal manual**, serta **Dynamic SL/TP** untuk protect capital dan lock-in profit.
+Bot ini menggunakan **strategi open source yang terbukti profitable**, dengan tambahan **5 filter optimasi** untuk mengurangi false signal di pasar sideways. MACD sebagai konfirmasi utama, pemisahan jelas antara **sinyal otomatis** dan **sinyal manual**, serta **Dynamic SL/TP** untuk protect capital dan lock-in profit.
+
+---
+
+## 🛡️ FILTER OPTIMASI (V4.0 - NEW!)
+
+### 1. ADX Filter (Trend Strength)
+- **ADX >= 20**: Tren cukup kuat, boleh trading
+- **ADX < 20**: Pasar sideways/ranging, SKIP trading
+- **+DI vs -DI**: Menentukan arah tren (bullish/bearish)
+
+### 2. RSI Level Boundaries
+- **BUY**: RSI harus < 70 (tidak overbought)
+- **SELL**: RSI harus > 30 (tidak oversold)
+- Mencegah entry di puncak/dasar
+
+### 3. Pin Bar Stricter (66.67%)
+- Tail harus minimal 2/3 dari total candle range
+- Sebelumnya hanya 60%, sekarang 66.67%
+- Menyaring pin bar lemah
+
+### 4. EMA Slope Filter
+- **BUY**: EMA harus menukik ke atas (slope > 0)
+- **SELL**: EMA harus menukik ke bawah (slope < 0)
+- EMA flat = sinyal lemah, hati-hati
+
+### 5. Session Filter (Trading Hours)
+- **London Session**: 14:00-18:00 WIB (07:00-11:00 UTC)
+- **New York Session**: 19:00-23:00 WIB (12:00-16:00 UTC)
+- **Overlap (OPTIMAL)**: 19:00-21:00 WIB (12:00-14:00 UTC)
+- Di luar jam ini = volatilitas rendah, skip trading
 
 ### 🌟 Referensi Open Source:
 - [XAUUSD Trading Bot](https://github.com/3aLaee/xauusd-trading-bot) - MACD + Price Action

@@ -736,6 +736,32 @@ class IndicatorEngine:
             failed_indicators.append('cerebr')
         
         try:
+            adx_period = getattr(self.config, 'ADX_PERIOD', 14)
+            adx_series, plus_di_series, minus_di_series = self.calculate_adx(df, period=adx_period)
+            indicators['adx'] = safe_series_operation(adx_series, 'value', -1, 0.0)
+            indicators['adx_prev'] = safe_series_operation(adx_series, 'value', -2, 0.0)
+            indicators['plus_di'] = safe_series_operation(plus_di_series, 'value', -1, 0.0)
+            indicators['minus_di'] = safe_series_operation(minus_di_series, 'value', -1, 0.0)
+        except Exception as e:
+            self._logger.warning(f"Gagal menghitung ADX: {str(e)}")
+            indicators['adx'] = 0.0
+            indicators['adx_prev'] = 0.0
+            indicators['plus_di'] = 0.0
+            indicators['minus_di'] = 0.0
+            failed_indicators.append('adx')
+        
+        try:
+            ema_slope_period = self.ema_periods[1] if len(self.ema_periods) > 1 else 20
+            ema_slope = self.calculate_ema_slope(df, period=ema_slope_period, lookback=3)
+            indicators['ema_slope'] = safe_series_operation(ema_slope, 'value', -1, 0.0)
+            indicators['ema_slope_prev'] = safe_series_operation(ema_slope, 'value', -2, 0.0)
+        except Exception as e:
+            self._logger.warning(f"Gagal menghitung EMA slope: {str(e)}")
+            indicators['ema_slope'] = 0.0
+            indicators['ema_slope_prev'] = 0.0
+            failed_indicators.append('ema_slope')
+        
+        try:
             close_series = self._get_column_series(df, 'close')
             high_series = self._get_column_series(df, 'high')
             low_series = self._get_column_series(df, 'low')
@@ -906,9 +932,10 @@ class IndicatorEngine:
             upper_wick_pct = upper_wick / total_range
             lower_wick_pct = lower_wick / total_range
             
-            if lower_wick_pct > 0.60:
+            pinbar_threshold = 0.6667
+            if lower_wick_pct >= pinbar_threshold:
                 result['bullish_pinbar'] = True
-            if upper_wick_pct > 0.60:
+            if upper_wick_pct >= pinbar_threshold:
                 result['bearish_pinbar'] = True
         
         body_size = body if body > 1e-10 else 1e-10
@@ -1031,6 +1058,117 @@ class IndicatorEngine:
         except Exception as e:
             self._logger.warning(f"Gagal menghitung support/resistance: {str(e)}")
             return default_result
+    
+    def calculate_adx(self, df: pd.DataFrame, period: int = 14) -> tuple:
+        """
+        Calculate ADX (Average Directional Index) untuk mengukur kekuatan tren.
+        
+        ADX mengukur kekuatan tren tanpa memperhatikan arah tren.
+        - ADX > 25: Tren kuat
+        - ADX > 20: Tren cukup kuat
+        - ADX < 20: Sideways/ranging market
+        
+        Args:
+            df: DataFrame with OHLC data
+            period: Period for ADX calculation (default: 14)
+        
+        Returns:
+            tuple: (adx_series, plus_di_series, minus_di_series)
+        """
+        if not self._validate_dataframe(df, ['high', 'low', 'close']):
+            empty = pd.Series([0.0])
+            return empty, empty, empty
+        
+        if len(df) < period + 1:
+            empty = self._create_default_series(df, 0.0)
+            return empty, empty, empty
+        
+        high = self._get_column_series(df, 'high')
+        low = self._get_column_series(df, 'low')
+        close = self._get_column_series(df, 'close')
+        
+        try:
+            with np.errstate(all='ignore'):
+                plus_dm = high.diff()
+                minus_dm = low.diff().abs()
+                
+                plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+                minus_dm = minus_dm.where((minus_dm > plus_dm.shift(0).abs()) & (low.diff() < 0), 0.0)
+                
+                plus_dm = plus_dm.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                minus_dm = minus_dm.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                
+                tr1 = (high - low).abs()
+                tr2 = (high - close.shift(1)).abs()
+                tr3 = (low - close.shift(1)).abs()
+                
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                tr = tr.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                
+                smoothed_plus_dm = plus_dm.ewm(span=period, adjust=False).mean()
+                smoothed_minus_dm = minus_dm.ewm(span=period, adjust=False).mean()
+                smoothed_tr = tr.ewm(span=period, adjust=False).mean()
+                
+                smoothed_tr_safe = smoothed_tr.replace(0, 1e-10)
+                plus_di = 100 * safe_divide(smoothed_plus_dm, smoothed_tr_safe, fill_value=0.0)
+                minus_di = 100 * safe_divide(smoothed_minus_dm, smoothed_tr_safe, fill_value=0.0)
+                
+                di_sum = plus_di + minus_di
+                di_sum_safe = di_sum.replace(0, 1e-10)
+                di_diff = (plus_di - minus_di).abs()
+                dx = 100 * safe_divide(di_diff, di_sum_safe, fill_value=0.0)
+                
+                adx = dx.ewm(span=period, adjust=False).mean()
+                
+                adx = _safe_clip(adx.replace([np.inf, -np.inf], np.nan).fillna(0.0), 0, 100)
+                plus_di = _safe_clip(plus_di.replace([np.inf, -np.inf], np.nan).fillna(0.0), 0, 100)
+                minus_di = _safe_clip(minus_di.replace([np.inf, -np.inf], np.nan).fillna(0.0), 0, 100)
+            
+            return pd.Series(adx, index=df.index), pd.Series(plus_di, index=df.index), pd.Series(minus_di, index=df.index)
+            
+        except Exception as e:
+            self._logger.warning(f"Gagal menghitung ADX: {str(e)}")
+            empty = self._create_default_series(df, 0.0)
+            return empty, empty, empty
+    
+    def calculate_ema_slope(self, df: pd.DataFrame, period: int = 21, lookback: int = 3) -> pd.Series:
+        """
+        Calculate EMA slope untuk mendeteksi arah kemiringan EMA.
+        
+        Slope positif = EMA menukik ke atas (bullish)
+        Slope negatif = EMA menukik ke bawah (bearish)
+        Slope mendekati 0 = EMA flat (sideways)
+        
+        Args:
+            df: DataFrame with OHLC data
+            period: EMA period
+            lookback: Number of candles to calculate slope over
+        
+        Returns:
+            pd.Series: EMA slope values (normalized as percentage)
+        """
+        if not self._validate_dataframe(df, ['close']):
+            return pd.Series([0.0])
+        
+        if len(df) < period + lookback:
+            return self._create_default_series(df, 0.0)
+        
+        try:
+            ema = self.calculate_ema(df, period)
+            
+            with np.errstate(all='ignore'):
+                ema_diff = ema.diff(lookback)
+                
+                ema_safe = ema.replace(0, 1e-10)
+                slope_pct = (ema_diff / ema_safe) * 100
+                
+                slope_pct = slope_pct.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            
+            return pd.Series(slope_pct, index=df.index)
+            
+        except Exception as e:
+            self._logger.warning(f"Gagal menghitung EMA slope: {str(e)}")
+            return self._create_default_series(df, 0.0)
     
     def calculate_volume_confirmation(self, df: pd.DataFrame, period: int = 10) -> Dict:
         """

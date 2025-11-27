@@ -491,6 +491,21 @@ class Config:
     VOLUME_THRESHOLD_MULTIPLIER = _get_float_env('VOLUME_THRESHOLD_MULTIPLIER', '0.8')
     MAX_SPREAD_PIPS = _get_float_env('MAX_SPREAD_PIPS', '20.0')
     
+    ADX_PERIOD = _get_int_env('ADX_PERIOD', '14')
+    ADX_THRESHOLD = _get_int_env('ADX_THRESHOLD', '20')
+    ADX_FILTER_ENABLED = os.getenv('ADX_FILTER_ENABLED', 'true').lower() == 'true'
+    
+    RSI_BUY_MAX_LEVEL = _get_int_env('RSI_BUY_MAX_LEVEL', '70')
+    RSI_SELL_MIN_LEVEL = _get_int_env('RSI_SELL_MIN_LEVEL', '30')
+    RSI_LEVEL_FILTER_ENABLED = os.getenv('RSI_LEVEL_FILTER_ENABLED', 'true').lower() == 'true'
+    
+    EMA_SLOPE_FILTER_ENABLED = os.getenv('EMA_SLOPE_FILTER_ENABLED', 'true').lower() == 'true'
+    EMA_SLOPE_MIN_THRESHOLD = _get_float_env('EMA_SLOPE_MIN_THRESHOLD', '0.001')
+    
+    SESSION_FILTER_STRICT = os.getenv('SESSION_FILTER_STRICT', 'true').lower() == 'true'
+    LONDON_SESSION_START_UTC = _get_int_env('LONDON_SESSION_START_UTC', '7')
+    NY_SESSION_END_UTC = _get_int_env('NY_SESSION_END_UTC', '16')
+    
     SIGNAL_SCORE_THRESHOLD_AUTO = _get_int_env('SIGNAL_SCORE_THRESHOLD_AUTO', '60')
     SIGNAL_SCORE_THRESHOLD_MANUAL = _get_int_env('SIGNAL_SCORE_THRESHOLD_MANUAL', '40')
     

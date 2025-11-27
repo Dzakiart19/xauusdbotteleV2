@@ -684,25 +684,51 @@ class TradingStrategy:
             logger.error(f"Error checking pullback confirmation: {e}")
             return False
     
-    def is_optimal_trading_session(self) -> bool:
-        """Check if current time is within London-NY overlap (07:00-16:00 UTC)
+    def is_optimal_trading_session(self) -> Tuple[bool, str]:
+        """Check if current time is within optimal trading hours (London-NY session).
+        
+        Sesi optimal untuk trading XAU/USD:
+        - Sesi London: 14:00-18:00 WIB (07:00-11:00 UTC)
+        - Sesi New York: 19:00-23:00 WIB (12:00-16:00 UTC)
+        - Overlap London-NY: 19:00-21:00 WIB (12:00-14:00 UTC) - PALING OPTIMAL
         
         Returns:
-            True if within optimal trading session, False otherwise
+            Tuple of (is_optimal, reason)
         """
         try:
-            from datetime import datetime
-            import pytz
-            
             current_time = datetime.now(pytz.UTC)
             current_hour = current_time.hour
             
-            if 7 <= current_hour < 16:
-                return True
-            return False
+            london_start = getattr(self.config, 'LONDON_SESSION_START_UTC', 7)
+            ny_end = getattr(self.config, 'NY_SESSION_END_UTC', 16)
+            session_strict = getattr(self.config, 'SESSION_FILTER_STRICT', True)
+            
+            is_london_session = 7 <= current_hour < 12
+            is_ny_session = 12 <= current_hour < 17
+            is_overlap = 12 <= current_hour < 14
+            
+            current_hour_wib = (current_hour + 7) % 24
+            
+            if is_overlap:
+                reason = f"✅ Session OPTIMAL: London-NY Overlap ({current_hour_wib:02d}:00 WIB)"
+                return True, reason
+            elif is_london_session:
+                reason = f"✅ Session BAIK: Sesi London ({current_hour_wib:02d}:00 WIB)"
+                return True, reason
+            elif is_ny_session:
+                reason = f"✅ Session BAIK: Sesi New York ({current_hour_wib:02d}:00 WIB)"
+                return True, reason
+            else:
+                if session_strict:
+                    reason = f"⚠️ Session SEPI: Di luar jam aktif ({current_hour_wib:02d}:00 WIB) - Volatilitas rendah"
+                    return False, reason
+                else:
+                    reason = f"⚠️ Session SEPI: Di luar jam aktif ({current_hour_wib:02d}:00 WIB) - filter dilewati"
+                    return True, reason
+                    
         except (StrategyError, Exception) as e:
             logger.error(f"Error checking trading session: {e}")
-            return False
+            return True, "Session check error - skipped"
     
     def check_trend_filter(self, indicators: Dict) -> Tuple[bool, str, str]:
         """Check trend filter conditions - RELAXED VERSION for ranging market
@@ -910,6 +936,167 @@ class TradingStrategy:
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_momentum_filter: {e}")
             return False, f"Error: {str(e)}"
+    
+    def check_adx_filter(self, indicators: Dict) -> Tuple[bool, str, float]:
+        """Check ADX filter untuk memastikan tren cukup kuat (bukan sideways).
+        
+        ADX (Average Directional Index) mengukur kekuatan tren:
+        - ADX >= 20-25: Tren cukup kuat untuk trading
+        - ADX < 20: Sideways/ranging market, hindari trading
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            
+        Returns:
+            Tuple of (is_valid, reason, adx_value)
+        """
+        try:
+            if not getattr(self.config, 'ADX_FILTER_ENABLED', True):
+                return True, "✅ ADX Filter SKIPPED: Filter dinonaktifkan", 0.0
+            
+            adx = indicators.get('adx')
+            plus_di = indicators.get('plus_di')
+            minus_di = indicators.get('minus_di')
+            
+            if not is_valid_number(adx):
+                return True, "✅ ADX Filter SKIPPED: ADX data tidak tersedia", 0.0
+            
+            adx_val = safe_float(adx, 0.0)
+            adx_threshold = getattr(self.config, 'ADX_THRESHOLD', 20)
+            
+            if adx_val >= adx_threshold:
+                di_info = ""
+                if is_valid_number(plus_di) and is_valid_number(minus_di):
+                    plus_val = safe_float(plus_di, 0.0)
+                    minus_val = safe_float(minus_di, 0.0)
+                    if plus_val > minus_val:
+                        di_info = f" | +DI({plus_val:.1f}) > -DI({minus_val:.1f}) = Bullish"
+                    else:
+                        di_info = f" | -DI({minus_val:.1f}) > +DI({plus_val:.1f}) = Bearish"
+                
+                reason = f"✅ ADX Filter PASSED: ADX({adx_val:.1f}) >= {adx_threshold} (Tren KUAT){di_info}"
+                logger.info(reason)
+                return True, reason, adx_val
+            else:
+                reason = f"❌ ADX Filter FAILED: ADX({adx_val:.1f}) < {adx_threshold} (Sideways/Ranging Market)"
+                logger.info(reason)
+                return False, reason, adx_val
+                
+        except (StrategyError, Exception) as e:
+            logger.error(f"Error in check_adx_filter: {e}")
+            return True, f"✅ ADX Filter SKIPPED: Error - {str(e)}", 0.0
+    
+    def check_rsi_level_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check RSI level filter untuk menghindari entry di area jenuh.
+        
+        Logika:
+        - BUY: RSI harus < 70 (agar masih ada ruang harga naik)
+        - SELL: RSI harus > 30 (agar masih ada ruang harga turun)
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_valid, reason)
+        """
+        try:
+            if not getattr(self.config, 'RSI_LEVEL_FILTER_ENABLED', True):
+                return True, "✅ RSI Level Filter SKIPPED: Filter dinonaktifkan"
+            
+            rsi = indicators.get('rsi')
+            
+            if not is_valid_number(rsi):
+                return True, "✅ RSI Level Filter SKIPPED: RSI data tidak tersedia"
+            
+            rsi_val = safe_float(rsi, 50.0)
+            rsi_buy_max = getattr(self.config, 'RSI_BUY_MAX_LEVEL', 70)
+            rsi_sell_min = getattr(self.config, 'RSI_SELL_MIN_LEVEL', 30)
+            
+            if signal_type == 'BUY':
+                if rsi_val < rsi_buy_max:
+                    reason = f"✅ RSI Level Filter PASSED: RSI({rsi_val:.1f}) < {rsi_buy_max} (Masih ada ruang naik)"
+                    logger.info(reason)
+                    return True, reason
+                else:
+                    reason = f"❌ RSI Level Filter FAILED: RSI({rsi_val:.1f}) >= {rsi_buy_max} (Overbought - Jangan BUY di pucuk)"
+                    logger.info(reason)
+                    return False, reason
+            elif signal_type == 'SELL':
+                if rsi_val > rsi_sell_min:
+                    reason = f"✅ RSI Level Filter PASSED: RSI({rsi_val:.1f}) > {rsi_sell_min} (Masih ada ruang turun)"
+                    logger.info(reason)
+                    return True, reason
+                else:
+                    reason = f"❌ RSI Level Filter FAILED: RSI({rsi_val:.1f}) <= {rsi_sell_min} (Oversold - Jangan SELL di dasar)"
+                    logger.info(reason)
+                    return False, reason
+            
+            return True, "✅ RSI Level Filter SKIPPED: Invalid signal type"
+                
+        except (StrategyError, Exception) as e:
+            logger.error(f"Error in check_rsi_level_filter: {e}")
+            return True, f"✅ RSI Level Filter SKIPPED: Error - {str(e)}"
+    
+    def check_ema_slope_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check EMA slope filter untuk memastikan EMA menukik ke arah tren.
+        
+        Logika:
+        - BUY: EMA harus menukik ke atas (slope positif)
+        - SELL: EMA harus menukik ke bawah (slope negatif)
+        - EMA flat/horizontal = sinyal lemah, hindari trading
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_valid, reason)
+        """
+        try:
+            if not getattr(self.config, 'EMA_SLOPE_FILTER_ENABLED', True):
+                return True, "✅ EMA Slope Filter SKIPPED: Filter dinonaktifkan"
+            
+            ema_slope = indicators.get('ema_slope')
+            
+            if not is_valid_number(ema_slope):
+                return True, "✅ EMA Slope Filter SKIPPED: EMA slope data tidak tersedia"
+            
+            slope_val = safe_float(ema_slope, 0.0)
+            min_slope = getattr(self.config, 'EMA_SLOPE_MIN_THRESHOLD', 0.001)
+            
+            if signal_type == 'BUY':
+                if slope_val > min_slope:
+                    reason = f"✅ EMA Slope Filter PASSED: Slope({slope_val:.4f}%) > 0 (EMA menukik ke ATAS ↗)"
+                    logger.info(reason)
+                    return True, reason
+                elif slope_val > -min_slope:
+                    reason = f"⚠️ EMA Slope Filter WARNING: Slope({slope_val:.4f}%) mendatar (EMA FLAT - hati-hati)"
+                    logger.info(reason)
+                    return True, reason
+                else:
+                    reason = f"❌ EMA Slope Filter FAILED: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘ - tidak cocok untuk BUY)"
+                    logger.info(reason)
+                    return False, reason
+            elif signal_type == 'SELL':
+                if slope_val < -min_slope:
+                    reason = f"✅ EMA Slope Filter PASSED: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘)"
+                    logger.info(reason)
+                    return True, reason
+                elif slope_val < min_slope:
+                    reason = f"⚠️ EMA Slope Filter WARNING: Slope({slope_val:.4f}%) mendatar (EMA FLAT - hati-hati)"
+                    logger.info(reason)
+                    return True, reason
+                else:
+                    reason = f"❌ EMA Slope Filter FAILED: Slope({slope_val:.4f}%) > 0 (EMA menukik ke ATAS ↗ - tidak cocok untuk SELL)"
+                    logger.info(reason)
+                    return False, reason
+            
+            return True, "✅ EMA Slope Filter SKIPPED: Invalid signal type"
+                
+        except (StrategyError, Exception) as e:
+            logger.error(f"Error in check_ema_slope_filter: {e}")
+            return True, f"✅ EMA Slope Filter SKIPPED: Error - {str(e)}"
     
     def check_volume_vwap_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
         """Check volume and VWAP filter conditions - RELAXED VERSION
@@ -1191,18 +1378,21 @@ class TradingStrategy:
             return 1.0
     
     def get_multi_confirmation_score(self, indicators: Dict, current_spread: float = 0.0) -> Dict:
-        """Get comprehensive multi-confirmation analysis - WEIGHTED SCORING VERSION
+        """Get comprehensive multi-confirmation analysis - WEIGHTED SCORING VERSION + OPTIMIZATION FILTERS
         
-        PERBAIKAN dengan WEIGHTED SCORING:
-        - Trend Filter: 30% weight (MUST PASS - mandatory)
-        - Momentum Filter: 20% weight
-        - Volume Filter: 15% weight
-        - Price Action: 15% weight
+        PERBAIKAN dengan WEIGHTED SCORING + OPTIMIZATION FILTERS:
+        - Trend Filter: 25% weight (MUST PASS - mandatory)
+        - ADX Filter: 10% weight (kekuatan tren - OPTIMASI)
+        - Momentum Filter: 15% weight
+        - RSI Level Filter: 5% weight (anti-jenuh - OPTIMASI)
+        - EMA Slope Filter: 5% weight (arah EMA - OPTIMASI)
+        - Volume Filter: 10% weight
+        - Price Action: 10% weight
         - Session Filter: 10% weight
         - Spread Filter: 10% weight
         
         Threshold: 
-        - AUTO signal: ≥ 60% combined score + Trend MUST PASS
+        - AUTO signal: ≥ 60% combined score + Trend MUST PASS + ADX PASS
         - MANUAL signal: ≥ 40% combined score
         
         Dynamic adjustment based on ATR/volatility applied.
@@ -1217,7 +1407,10 @@ class TradingStrategy:
         try:
             result = {
                 'trend_filter': {'passed': False, 'signal_type': '', 'reason': ''},
+                'adx_filter': {'passed': False, 'reason': '', 'value': 0.0},
                 'momentum_filter': {'passed': False, 'reason': ''},
+                'rsi_level_filter': {'passed': False, 'reason': ''},
+                'ema_slope_filter': {'passed': False, 'reason': ''},
                 'volume_vwap_filter': {'passed': False, 'reason': ''},
                 'price_action': {'passed': False, 'reason': '', 'boost': 0},
                 'session_filter': {'passed': False, 'reason': ''},
@@ -1242,40 +1435,64 @@ class TradingStrategy:
                 return result
             
             result['signal_type'] = signal_type
-            result['total_score'] += 30
-            result['weighted_score'] += 30.0
+            result['total_score'] += 25
+            result['weighted_score'] += 25.0
             result['confidence_reasons'].append(trend_reason)
+            
+            adx_passed, adx_reason, adx_value = self.check_adx_filter(indicators)
+            result['adx_filter'] = {'passed': adx_passed, 'reason': adx_reason, 'value': adx_value}
+            result['confidence_reasons'].append(adx_reason)
+            
+            if adx_passed:
+                result['total_score'] += 10
+                result['weighted_score'] += 10.0
             
             momentum_passed, momentum_reason = self.check_momentum_filter(indicators, signal_type)
             result['momentum_filter'] = {'passed': momentum_passed, 'reason': momentum_reason}
             result['confidence_reasons'].append(momentum_reason)
             
             if momentum_passed:
-                result['total_score'] += 20
-                result['weighted_score'] += 20.0
+                result['total_score'] += 15
+                result['weighted_score'] += 15.0
+            
+            rsi_level_passed, rsi_level_reason = self.check_rsi_level_filter(indicators, signal_type)
+            result['rsi_level_filter'] = {'passed': rsi_level_passed, 'reason': rsi_level_reason}
+            result['confidence_reasons'].append(rsi_level_reason)
+            
+            if rsi_level_passed:
+                result['total_score'] += 5
+                result['weighted_score'] += 5.0
+            
+            ema_slope_passed, ema_slope_reason = self.check_ema_slope_filter(indicators, signal_type)
+            result['ema_slope_filter'] = {'passed': ema_slope_passed, 'reason': ema_slope_reason}
+            result['confidence_reasons'].append(ema_slope_reason)
+            
+            if ema_slope_passed:
+                result['total_score'] += 5
+                result['weighted_score'] += 5.0
             
             volume_passed, volume_reason = self.check_volume_vwap_filter(indicators, signal_type)
             result['volume_vwap_filter'] = {'passed': volume_passed, 'reason': volume_reason}
             result['confidence_reasons'].append(volume_reason)
             
             if volume_passed:
-                result['total_score'] += 15
-                result['weighted_score'] += 15.0
+                result['total_score'] += 10
+                result['weighted_score'] += 10.0
             
             pa_passed, pa_reason, pa_points = self.check_price_action_confirmation(indicators, signal_type)
             result['price_action'] = {'passed': pa_passed, 'reason': pa_reason, 'points': pa_points}
             result['confidence_reasons'].append(pa_reason)
             if pa_passed:
-                result['total_score'] += 15
-                result['weighted_score'] += 15.0
+                result['total_score'] += 10
+                result['weighted_score'] += 10.0
             
-            session_passed = self.is_optimal_trading_session()
+            session_passed, session_reason = self.is_optimal_trading_session()
             if session_passed:
-                result['session_filter'] = {'passed': True, 'reason': "✅ Session Filter PASSED: Optimal trading hours"}
+                result['session_filter'] = {'passed': True, 'reason': session_reason}
                 result['total_score'] += 10
                 result['weighted_score'] += 10.0
             else:
-                result['session_filter'] = {'passed': False, 'reason': "⚠️ Session Filter: Outside optimal hours (non-blocking)"}
+                result['session_filter'] = {'passed': False, 'reason': session_reason}
                 result['weighted_score'] += 5.0
             result['confidence_reasons'].append(result['session_filter']['reason'])
             
@@ -1300,16 +1517,18 @@ class TradingStrategy:
             
             auto_threshold = 60.0
             
-            core_filters_passed = trend_passed and (momentum_passed or volume_passed or pa_passed)
+            core_filters_passed = trend_passed and adx_passed and rsi_level_passed
+            supporting_filters = momentum_passed or volume_passed or pa_passed
             score_threshold_met = adjusted_score >= auto_threshold
             
-            result['all_mandatory_passed'] = core_filters_passed and score_threshold_met
+            result['all_mandatory_passed'] = core_filters_passed and supporting_filters and score_threshold_met
             
             volatility_info = ""
             if volatility_adj != 1.0:
                 volatility_info = f" | Volatility Adj: {volatility_adj:.2f}x"
             
-            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 (Weighted: {adjusted_score:.0f}%){volatility_info} | Signal Ready: {result['all_mandatory_passed']}")
+            adx_info = f" | ADX: {adx_value:.1f}" if adx_value > 0 else ""
+            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 (Weighted: {adjusted_score:.0f}%){adx_info}{volatility_info} | Signal Ready: {result['all_mandatory_passed']}")
             
             return result
             

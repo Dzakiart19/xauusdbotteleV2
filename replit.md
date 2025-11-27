@@ -64,4 +64,11 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
+- **2025-11-27:** Added 5 optimization filters to reduce false signals in sideways markets:
+  - ADX Filter: Minimum trend strength (ADX >= 20) to skip ranging markets
+  - RSI Level Filter: Prevents BUY at overbought (>70) and SELL at oversold (<30)
+  - Pin Bar Stricter: Increased tail requirement from 60% to 66.67% (2/3)
+  - EMA Slope Filter: Ensures EMA is actively trending, not flat
+  - Session Filter: Targets London+NY sessions (14:00-23:00 WIB / 07:00-16:00 UTC)
+- **2025-11-27:** Updated config.py with new parameters: ADX_PERIOD, ADX_THRESHOLD, RSI_BUY_MAX_LEVEL, RSI_SELL_MIN_LEVEL, EMA_SLOPE_FILTER_ENABLED, SESSION_FILTER_STRICT, etc.
 - **2025-11-27:** Fixed undefined `ErrorHandlingError` exception class in `bot/error_handler.py` - removed 5 references to non-existent exception class that was causing LSP errors.

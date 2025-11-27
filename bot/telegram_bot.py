@@ -1645,7 +1645,9 @@ class TradingBot:
                     if candle_count >= 30:
                         # EARLY CHECK: Skip signal detection if user already has active position
                         if self.signal_session_manager:
-                            can_create, block_reason = await self.signal_session_manager.can_create_signal(chat_id, 'auto')
+                            can_create, block_reason = await self.signal_session_manager.can_create_signal(
+                                chat_id, 'auto', position_tracker=self.position_tracker
+                            )
                             if not can_create:
                                 logger.debug(f"Skipping signal detection - {block_reason}")
                                 # Update both global and per-user cooldown bookkeeping to prevent tight loop
@@ -1723,7 +1725,9 @@ class TradingBot:
                                             
                                             # Double check sebelum create session (untuk race condition)
                                             if self.signal_session_manager:
-                                                can_create, block_reason = await self.signal_session_manager.can_create_signal(chat_id, 'auto')
+                                                can_create, block_reason = await self.signal_session_manager.can_create_signal(
+                                                    chat_id, 'auto', position_tracker=self.position_tracker
+                                                )
                                                 if not can_create:
                                                     logger.info(f"Signal creation blocked for user {mask_user_id(chat_id)}: {block_reason}")
                                                     continue
@@ -2878,7 +2882,9 @@ class TradingBot:
         
         try:
             if self.signal_session_manager:
-                can_create, block_reason = await self.signal_session_manager.can_create_signal(user_id, 'manual')
+                can_create, block_reason = await self.signal_session_manager.can_create_signal(
+                    user_id, 'manual', position_tracker=self.position_tracker
+                )
                 if not can_create:
                     await update.message.reply_text(
                         block_reason if block_reason else MessageFormatter.session_blocked('auto', 'manual'),

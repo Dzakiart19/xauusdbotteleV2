@@ -1627,18 +1627,6 @@ class PositionTracker:
             return self.active_positions.get(user_id, {}).copy()
         return {uid: pos.copy() for uid, pos in self.active_positions.items()}
     
-    def has_active_position(self, user_id: int) -> bool:
-        """Check if user has active position (sync version, returns snapshot)
-        
-        Note: For thread-safe access in async context, use has_active_position_async
-        WARNING: This is NOT fully thread-safe. Use has_active_position_async for critical operations.
-        """
-        if self.signal_session_manager:
-            if self.signal_session_manager.has_active_session(user_id):
-                return True
-        
-        return user_id in self.active_positions and len(self.active_positions.get(user_id, {})) > 0
-    
     async def has_active_position_async(self, user_id: int) -> bool:
         """Thread-safe check for active position with multi-source verification including DB fallback"""
         # Check 1: SignalSessionManager
@@ -1709,6 +1697,18 @@ class PositionTracker:
             return False
         finally:
             session.close()
+    
+    async def has_active_position_verified(self, user_id: int) -> bool:
+        """
+        Check if user has active position by verifying ONLY database and memory cache.
+        This method does NOT check SignalSessionManager to avoid circular dependency.
+        Used by SignalSessionManager to validate if stale sessions should be cleaned.
+        """
+        async with self._position_lock:
+            if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
+                return True
+        
+        return await self.verify_active_position_in_db(user_id)
     
     async def reload_active_positions(self):
         """Reload active positions from the database

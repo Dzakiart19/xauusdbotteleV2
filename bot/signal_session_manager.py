@@ -93,7 +93,8 @@ class SignalSessionManager:
     
     async def can_create_signal(self, user_id: int, signal_source: str, 
                                 signal_type: Optional[str] = None,
-                                current_price: Optional[float] = None) -> tuple[bool, Optional[str]]:
+                                current_price: Optional[float] = None,
+                                position_tracker=None) -> tuple[bool, Optional[str]]:
         """
         Cek apakah user bisa membuat sinyal baru dengan proteksi spam
         
@@ -102,6 +103,7 @@ class SignalSessionManager:
             signal_source: Sumber sinyal (auto/manual)
             signal_type: Tipe sinyal (BUY/SELL)
             current_price: Harga saat ini untuk cek pergerakan minimum
+            position_tracker: PositionTracker untuk validasi posisi aktif
         
         Returns:
             (can_create, rejection_reason)
@@ -111,18 +113,35 @@ class SignalSessionManager:
             last_info = self._last_signal_info.get(user_id)
             
             if active_session and not Config.AUTO_SIGNAL_REPLACEMENT_ALLOWED:
-                elapsed = (datetime.now(pytz.UTC) - active_session.started_at).total_seconds()
-                reason = (
-                    f"Sudah ada posisi aktif ({active_session.signal_type}). "
-                    f"Tutup posisi terlebih dahulu sebelum membuat sinyal baru. "
-                    f"Posisi aktif sudah berjalan {elapsed:.0f} detik."
-                )
-                logger.info(
-                    f"🚫 Sinyal ditolak (posisi aktif) - User:{user_id} "
-                    f"Posisi aktif:{active_session.signal_type} Berjalan:{elapsed:.0f}s | "
-                    f"AUTO_SIGNAL_REPLACEMENT_ALLOWED=false"
-                )
-                return False, reason
+                has_real_position = True
+                
+                if position_tracker is not None:
+                    try:
+                        has_real_position = await position_tracker.has_active_position_verified(user_id)
+                    except Exception as e:
+                        logger.warning(f"Error verifying position for user {user_id}: {e}")
+                        has_real_position = True
+                
+                if not has_real_position:
+                    logger.info(
+                        f"🧹 Membersihkan sesi stale untuk user {user_id} - "
+                        f"sesi ada tapi tidak ada posisi aktif di database"
+                    )
+                    del self.active_sessions[user_id]
+                    active_session = None
+                else:
+                    elapsed = (datetime.now(pytz.UTC) - active_session.started_at).total_seconds()
+                    reason = (
+                        f"Sudah ada posisi aktif ({active_session.signal_type}). "
+                        f"Tutup posisi terlebih dahulu sebelum membuat sinyal baru. "
+                        f"Posisi aktif sudah berjalan {elapsed:.0f} detik."
+                    )
+                    logger.info(
+                        f"🚫 Sinyal ditolak (posisi aktif) - User:{user_id} "
+                        f"Posisi aktif:{active_session.signal_type} Berjalan:{elapsed:.0f}s | "
+                        f"AUTO_SIGNAL_REPLACEMENT_ALLOWED=false"
+                    )
+                    return False, reason
             
             if active_session and signal_type:
                 if active_session.signal_type == signal_type:

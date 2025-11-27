@@ -222,6 +222,9 @@ class RateLimiter:
         Returns:
             True if call is allowed, False if rate limit exceeded
         """
+        if self.max_calls <= 0:
+            return False
+        
         now = time.time()
         
         while self.call_times and now - self.call_times[0] > self.time_window:

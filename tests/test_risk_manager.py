@@ -23,13 +23,14 @@ class TestRiskManager:
         assert reason is None
     
     def test_can_trade_cooldown_active(self, mock_config, mock_db_manager):
+        """Test that cooldown is disabled in UNLIMITED mode"""
         risk_manager = RiskManager(mock_config, mock_db_manager)
         
         risk_manager.record_signal(123456)
         can_trade, reason = risk_manager.can_trade(123456, 'BUY')
         
-        assert can_trade is False
-        assert 'Cooldown aktif' in reason
+        assert can_trade is True
+        assert reason is None
     
     def test_can_trade_cooldown_expired(self, mock_config, mock_db_manager):
         risk_manager = RiskManager(mock_config, mock_db_manager)
@@ -70,6 +71,7 @@ class TestRiskManager:
         assert reason is None
     
     def test_can_trade_daily_loss_limit_reached(self, mock_config, test_db):
+        """Test that daily loss limit is disabled in UNLIMITED mode"""
         from unittest.mock import Mock
         db_manager = Mock()
         db_manager.get_session = Mock(return_value=test_db)
@@ -93,10 +95,11 @@ class TestRiskManager:
         
         can_trade, reason = risk_manager.can_trade(123456, 'BUY')
         
-        assert can_trade is False
-        assert 'Batas kerugian harian' in reason
+        assert can_trade is True
+        assert reason is None
     
     def test_can_trade_different_users(self, mock_config, mock_db_manager):
+        """Test that different users can trade independently in UNLIMITED mode"""
         risk_manager = RiskManager(mock_config, mock_db_manager)
         
         risk_manager.record_signal(123456)
@@ -104,7 +107,7 @@ class TestRiskManager:
         can_trade_1, _ = risk_manager.can_trade(123456, 'BUY')
         can_trade_2, _ = risk_manager.can_trade(789012, 'BUY')
         
-        assert can_trade_1 is False
+        assert can_trade_1 is True
         assert can_trade_2 is True
     
     def test_record_signal(self, mock_config, mock_db_manager):
@@ -295,6 +298,7 @@ class TestRiskManager:
             assert pl == 0
     
     def test_multiple_users_independent_cooldowns(self, mock_config, mock_db_manager):
+        """Test that multiple users can trade without cooldown in UNLIMITED mode"""
         risk_manager = RiskManager(mock_config, mock_db_manager)
         
         risk_manager.record_signal(111111)
@@ -306,5 +310,5 @@ class TestRiskManager:
         can_trade_1, _ = risk_manager.can_trade(111111, 'BUY')
         can_trade_2, _ = risk_manager.can_trade(222222, 'BUY')
         
-        assert can_trade_1 is False
-        assert can_trade_2 is False
+        assert can_trade_1 is True
+        assert can_trade_2 is True

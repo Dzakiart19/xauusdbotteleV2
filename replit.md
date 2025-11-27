@@ -64,7 +64,25 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
-- **2025-11-27 (CURRENT):** KOYEB DEPLOYMENT OPTIMIZATION:
+- **2025-11-27 (CURRENT):** SIGNAL ACCURACY ENHANCEMENT & BOT STABILITY:
+  - **Daily Summary Fix (Bot Stuck Prevention):**
+    - Added `_is_sending_daily_summary` flag di AlertSystem untuk tracking
+    - Added `_daily_summary_lock` untuk thread-safety
+    - Updated `send_daily_summary()` dengan try/finally pattern - flag SELALU reset
+    - Updated `_monitoring_loop()` untuk skip signal detection saat daily summary, dengan counter dan recovery logging
+  - **M5 Confirmation untuk AUTO signals (Multi-Timeframe Analysis):**
+    - New method `check_m5_confirmation()` di strategy.py (baris 981-1096)
+    - Memeriksa EMA alignment, RSI direction, dan MACD direction di M5
+    - Minimal 2 dari 3 kriteria harus pass untuk AUTO signals
+    - Untuk MANUAL signals: M5 confirmation informational only (non-blocking)
+    - M5 data di-fetch di `_monitoring_loop()` dan di-pass ke `detect_signal()`
+  - **ADX Filter BLOCKING untuk AUTO signals:**
+    - Untuk AUTO: `core_filters_passed = trend_passed AND adx_passed` (BLOCKING)
+    - Untuk MANUAL: `core_filters_passed = trend_passed` saja (ADX non-blocking)
+    - ADX threshold: >= 15 untuk pass
+  - **Flow Signal AUTO sekarang:** M1 signal → ADX blocking → M5 confirmation blocking → generate signal
+  - **Backward Compatibility:** Jika M5 data tidak tersedia, AUTO signal tetap lanjut tanpa M5
+- **2025-11-27:** KOYEB DEPLOYMENT OPTIMIZATION:
   - **requirements.txt cleanup:** Removed all duplicate packages (35→17 entries) for cleaner builds
   - **Dockerfile enhanced for chart rendering:**
     - Added fonts: `fonts-dejavu-core`, `fonts-liberation`, `fontconfig` 

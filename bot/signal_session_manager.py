@@ -170,13 +170,18 @@ class SignalSessionManager:
                 if last_info['signal_type'] == signal_type:
                     time_since_last = (datetime.now(pytz.UTC) - last_info['timestamp']).total_seconds()
                     cooldown = Config.TICK_COOLDOWN_FOR_SAME_SIGNAL
+                    min_movement = Config.SIGNAL_MINIMUM_PRICE_MOVEMENT
                     
-                    if time_since_last < cooldown:
+                    if cooldown <= 0 and min_movement <= 0.1:
+                        logger.info(
+                            f"✅ SCALPING MODE: Sinyal unlimited diizinkan - User:{user_id} "
+                            f"Tipe:{signal_type} (cooldown=0, min_movement rendah)"
+                        )
+                    elif cooldown > 0 and time_since_last < cooldown:
                         last_price = last_info['entry_price']
                         price_movement = abs(current_price - last_price)
-                        min_movement = Config.SIGNAL_MINIMUM_PRICE_MOVEMENT
                         
-                        if price_movement < min_movement:
+                        if min_movement > 0 and price_movement < min_movement:
                             remaining = cooldown - time_since_last
                             reason = (
                                 f"Pergerakan harga belum cukup ({price_movement:.2f} < {min_movement:.2f}). "
@@ -187,10 +192,6 @@ class SignalSessionManager:
                                 f"Tipe:{signal_type} Pergerakan:{price_movement:.2f} < Min:{min_movement:.2f}"
                             )
                             self._update_last_signal_info(user_id, signal_type, current_price)
-                            logger.info(
-                                f"📝 Signal tracking diperbarui (ditolak): {signal_type} @ ${current_price:.2f} | "
-                                f"Alasan: Pergerakan harga minimal tidak tercapai"
-                            )
                             return False, reason
         
         return True, None

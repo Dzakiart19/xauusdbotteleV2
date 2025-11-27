@@ -474,40 +474,40 @@ class Config:
         }
     
     RSI_PERIOD = _get_int_env('RSI_PERIOD', '14')
-    RSI_OVERSOLD_LEVEL = _get_int_env('RSI_OVERSOLD_LEVEL', '25')
-    RSI_OVERBOUGHT_LEVEL = _get_int_env('RSI_OVERBOUGHT_LEVEL', '75')
-    RSI_ENTRY_MIN = _get_int_env('RSI_ENTRY_MIN', '25')
-    RSI_ENTRY_MAX = _get_int_env('RSI_ENTRY_MAX', '75')
+    RSI_OVERSOLD_LEVEL = _get_int_env('RSI_OVERSOLD_LEVEL', '20')
+    RSI_OVERBOUGHT_LEVEL = _get_int_env('RSI_OVERBOUGHT_LEVEL', '80')
+    RSI_ENTRY_MIN = _get_int_env('RSI_ENTRY_MIN', '15')
+    RSI_ENTRY_MAX = _get_int_env('RSI_ENTRY_MAX', '85')
     STOCH_K_PERIOD = _get_int_env('STOCH_K_PERIOD', '8')
     STOCH_D_PERIOD = _get_int_env('STOCH_D_PERIOD', '3')
     STOCH_SMOOTH_K = _get_int_env('STOCH_SMOOTH_K', '3')
-    STOCH_OVERSOLD_LEVEL = _get_int_env('STOCH_OVERSOLD_LEVEL', '15')
-    STOCH_OVERBOUGHT_LEVEL = _get_int_env('STOCH_OVERBOUGHT_LEVEL', '85')
+    STOCH_OVERSOLD_LEVEL = _get_int_env('STOCH_OVERSOLD_LEVEL', '10')
+    STOCH_OVERBOUGHT_LEVEL = _get_int_env('STOCH_OVERBOUGHT_LEVEL', '90')
     ATR_PERIOD = _get_int_env('ATR_PERIOD', '14')
     MACD_FAST = _get_int_env('MACD_FAST', '12')
     MACD_SLOW = _get_int_env('MACD_SLOW', '26')
     MACD_SIGNAL = _get_int_env('MACD_SIGNAL', '9')
     VOLUME_AVG_PERIOD = _get_int_env('VOLUME_AVG_PERIOD', '10')
-    VOLUME_THRESHOLD_MULTIPLIER = _get_float_env('VOLUME_THRESHOLD_MULTIPLIER', '0.8')
-    MAX_SPREAD_PIPS = _get_float_env('MAX_SPREAD_PIPS', '20.0')
+    VOLUME_THRESHOLD_MULTIPLIER = _get_float_env('VOLUME_THRESHOLD_MULTIPLIER', '0.3')
+    MAX_SPREAD_PIPS = _get_float_env('MAX_SPREAD_PIPS', '50.0')
     
     ADX_PERIOD = _get_int_env('ADX_PERIOD', '14')
-    ADX_THRESHOLD = _get_int_env('ADX_THRESHOLD', '20')
-    ADX_FILTER_ENABLED = os.getenv('ADX_FILTER_ENABLED', 'true').lower() == 'true'
+    ADX_THRESHOLD = _get_int_env('ADX_THRESHOLD', '15')
+    ADX_FILTER_ENABLED = os.getenv('ADX_FILTER_ENABLED', 'false').lower() == 'true'
     
-    RSI_BUY_MAX_LEVEL = _get_int_env('RSI_BUY_MAX_LEVEL', '70')
-    RSI_SELL_MIN_LEVEL = _get_int_env('RSI_SELL_MIN_LEVEL', '30')
-    RSI_LEVEL_FILTER_ENABLED = os.getenv('RSI_LEVEL_FILTER_ENABLED', 'true').lower() == 'true'
+    RSI_BUY_MAX_LEVEL = _get_int_env('RSI_BUY_MAX_LEVEL', '80')
+    RSI_SELL_MIN_LEVEL = _get_int_env('RSI_SELL_MIN_LEVEL', '20')
+    RSI_LEVEL_FILTER_ENABLED = os.getenv('RSI_LEVEL_FILTER_ENABLED', 'false').lower() == 'true'
     
-    EMA_SLOPE_FILTER_ENABLED = os.getenv('EMA_SLOPE_FILTER_ENABLED', 'true').lower() == 'true'
-    EMA_SLOPE_MIN_THRESHOLD = _get_float_env('EMA_SLOPE_MIN_THRESHOLD', '0.001')
+    EMA_SLOPE_FILTER_ENABLED = os.getenv('EMA_SLOPE_FILTER_ENABLED', 'false').lower() == 'true'
+    EMA_SLOPE_MIN_THRESHOLD = _get_float_env('EMA_SLOPE_MIN_THRESHOLD', '0.0001')
     
-    SESSION_FILTER_STRICT = os.getenv('SESSION_FILTER_STRICT', 'true').lower() == 'true'
-    LONDON_SESSION_START_UTC = _get_int_env('LONDON_SESSION_START_UTC', '7')
-    NY_SESSION_END_UTC = _get_int_env('NY_SESSION_END_UTC', '16')
+    SESSION_FILTER_STRICT = os.getenv('SESSION_FILTER_STRICT', 'false').lower() == 'true'
+    LONDON_SESSION_START_UTC = _get_int_env('LONDON_SESSION_START_UTC', '0')
+    NY_SESSION_END_UTC = _get_int_env('NY_SESSION_END_UTC', '23')
     
-    SIGNAL_SCORE_THRESHOLD_AUTO = _get_int_env('SIGNAL_SCORE_THRESHOLD_AUTO', '60')
-    SIGNAL_SCORE_THRESHOLD_MANUAL = _get_int_env('SIGNAL_SCORE_THRESHOLD_MANUAL', '40')
+    SIGNAL_SCORE_THRESHOLD_AUTO = _get_int_env('SIGNAL_SCORE_THRESHOLD_AUTO', '30')
+    SIGNAL_SCORE_THRESHOLD_MANUAL = _get_int_env('SIGNAL_SCORE_THRESHOLD_MANUAL', '20')
     
     SL_ATR_MULTIPLIER = _get_float_env('SL_ATR_MULTIPLIER', '1.2')
     MIN_SL_PIPS = _get_float_env('MIN_SL_PIPS', '15.0')
@@ -519,8 +519,8 @@ class Config:
     SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '0')
     MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '0')
     
-    SIGNAL_MINIMUM_PRICE_MOVEMENT = _get_float_env('SIGNAL_MINIMUM_PRICE_MOVEMENT', '0.50')
-    TICK_COOLDOWN_FOR_SAME_SIGNAL = _get_int_env('TICK_COOLDOWN_FOR_SAME_SIGNAL', '60')
+    SIGNAL_MINIMUM_PRICE_MOVEMENT = _get_float_env('SIGNAL_MINIMUM_PRICE_MOVEMENT', '0.05')
+    TICK_COOLDOWN_FOR_SAME_SIGNAL = _get_int_env('TICK_COOLDOWN_FOR_SAME_SIGNAL', '0')
     AUTO_SIGNAL_REPLACEMENT_ALLOWED = os.getenv('AUTO_SIGNAL_REPLACEMENT_ALLOWED', 'false').lower() == 'true'
     CANDLE_CLOSE_ONLY_SIGNALS = os.getenv('CANDLE_CLOSE_ONLY_SIGNALS', 'true').lower() == 'true'
     DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '0.0')

@@ -685,50 +685,40 @@ class TradingStrategy:
             return False
     
     def is_optimal_trading_session(self) -> Tuple[bool, str]:
-        """Check if current time is within optimal trading hours (London-NY session).
+        """Check if current time is within optimal trading hours - SCALPING MODE: 24/7 ENABLED
         
-        Sesi optimal untuk trading XAU/USD:
-        - Sesi London: 14:00-18:00 WIB (07:00-11:00 UTC)
-        - Sesi New York: 19:00-23:00 WIB (12:00-16:00 UTC)
-        - Overlap London-NY: 19:00-21:00 WIB (12:00-14:00 UTC) - PALING OPTIMAL
+        SCALPING MODE: Trading diizinkan 24 jam untuk menangkap semua peluang.
+        Session info hanya untuk informasi, tidak memblokir sinyal.
         
         Returns:
-            Tuple of (is_optimal, reason)
+            Tuple of (is_optimal, reason) - Selalu True untuk scalping mode
         """
         try:
             current_time = datetime.now(pytz.UTC)
             current_hour = current_time.hour
-            
-            london_start = getattr(self.config, 'LONDON_SESSION_START_UTC', 7)
-            ny_end = getattr(self.config, 'NY_SESSION_END_UTC', 16)
-            session_strict = getattr(self.config, 'SESSION_FILTER_STRICT', True)
+            current_hour_wib = (current_hour + 7) % 24
             
             is_london_session = 7 <= current_hour < 12
             is_ny_session = 12 <= current_hour < 17
             is_overlap = 12 <= current_hour < 14
-            
-            current_hour_wib = (current_hour + 7) % 24
+            is_asian_session = 0 <= current_hour < 7
             
             if is_overlap:
-                reason = f"✅ Session OPTIMAL: London-NY Overlap ({current_hour_wib:02d}:00 WIB)"
-                return True, reason
+                reason = f"✅ Session OPTIMAL: London-NY Overlap ({current_hour_wib:02d}:00 WIB) - SCALPING ACTIVE"
             elif is_london_session:
-                reason = f"✅ Session BAIK: Sesi London ({current_hour_wib:02d}:00 WIB)"
-                return True, reason
+                reason = f"✅ Session BAIK: Sesi London ({current_hour_wib:02d}:00 WIB) - SCALPING ACTIVE"
             elif is_ny_session:
-                reason = f"✅ Session BAIK: Sesi New York ({current_hour_wib:02d}:00 WIB)"
-                return True, reason
+                reason = f"✅ Session BAIK: Sesi New York ({current_hour_wib:02d}:00 WIB) - SCALPING ACTIVE"
+            elif is_asian_session:
+                reason = f"✅ Session ASIA: Sesi Asia ({current_hour_wib:02d}:00 WIB) - SCALPING ACTIVE 24/7"
             else:
-                if session_strict:
-                    reason = f"⚠️ Session SEPI: Di luar jam aktif ({current_hour_wib:02d}:00 WIB) - Volatilitas rendah"
-                    return False, reason
-                else:
-                    reason = f"⚠️ Session SEPI: Di luar jam aktif ({current_hour_wib:02d}:00 WIB) - filter dilewati"
-                    return True, reason
+                reason = f"✅ Session AKTIF: Mode Scalping 24/7 ({current_hour_wib:02d}:00 WIB)"
+            
+            return True, reason
                     
         except (StrategyError, Exception) as e:
             logger.error(f"Error checking trading session: {e}")
-            return True, "Session check error - skipped"
+            return True, "✅ Session check - SCALPING MODE 24/7"
     
     def check_trend_filter(self, indicators: Dict) -> Tuple[bool, str, str]:
         """Check trend filter conditions - RELAXED VERSION for ranging market
@@ -882,27 +872,21 @@ class TradingStrategy:
             
             rsi = safe_float(rsi, 50.0)
             
-            rsi_entry_min = 25.0
-            rsi_entry_max = 75.0
+            rsi_entry_min = 10.0
+            rsi_entry_max = 90.0
             
             rsi_in_range = rsi_entry_min <= rsi <= rsi_entry_max
             if not rsi_in_range:
-                reason = f"❌ Momentum Filter FAILED: RSI({rsi:.1f}) not in entry range [{rsi_entry_min}-{rsi_entry_max}]"
+                reason = f"⚠️ Momentum Filter WARNING: RSI({rsi:.1f}) extreme - tetap lanjut untuk scalping"
                 logger.debug(reason)
-                return False, reason
             
-            rsi_direction_valid = False
-            neutral_zone = 40 <= rsi <= 60
+            rsi_direction_valid = True
+            neutral_zone = 30 <= rsi <= 70
             
             if signal_type == 'BUY':
-                rsi_direction_valid = rsi >= 45 or neutral_zone
+                rsi_direction_valid = rsi >= 30 or neutral_zone
             elif signal_type == 'SELL':
-                rsi_direction_valid = rsi <= 55 or neutral_zone
-            
-            if not rsi_direction_valid:
-                reason = f"❌ Momentum Filter FAILED: RSI({rsi:.1f}) direction mismatch for {signal_type}"
-                logger.debug(reason)
-                return False, reason
+                rsi_direction_valid = rsi <= 70 or neutral_zone
             
             stoch_reason = ""
             
@@ -938,161 +922,145 @@ class TradingStrategy:
             return False, f"Error: {str(e)}"
     
     def check_adx_filter(self, indicators: Dict) -> Tuple[bool, str, float]:
-        """Check ADX filter untuk memastikan tren cukup kuat (bukan sideways).
+        """Check ADX filter - SCALPING MODE: Non-blocking, hanya info
         
-        ADX (Average Directional Index) mengukur kekuatan tren:
-        - ADX >= 20-25: Tren cukup kuat untuk trading
-        - ADX < 20: Sideways/ranging market, hindari trading
+        SCALPING MODE: ADX filter tidak memblokir sinyal.
+        Market sideways tetap bisa di-scalp dengan teknik yang benar.
         
         Args:
             indicators: Dictionary of calculated indicators
             
         Returns:
-            Tuple of (is_valid, reason, adx_value)
+            Tuple of (is_valid, reason, adx_value) - Selalu True untuk scalping
         """
         try:
-            if not getattr(self.config, 'ADX_FILTER_ENABLED', True):
-                return True, "✅ ADX Filter SKIPPED: Filter dinonaktifkan", 0.0
-            
             adx = indicators.get('adx')
             plus_di = indicators.get('plus_di')
             minus_di = indicators.get('minus_di')
             
             if not is_valid_number(adx):
-                return True, "✅ ADX Filter SKIPPED: ADX data tidak tersedia", 0.0
+                return True, "✅ ADX Info: Data tidak tersedia - SCALPING LANJUT", 0.0
             
             adx_val = safe_float(adx, 0.0)
-            adx_threshold = getattr(self.config, 'ADX_THRESHOLD', 20)
+            adx_threshold = getattr(self.config, 'ADX_THRESHOLD', 15)
+            
+            di_info = ""
+            if is_valid_number(plus_di) and is_valid_number(minus_di):
+                plus_val = safe_float(plus_di, 0.0)
+                minus_val = safe_float(minus_di, 0.0)
+                if plus_val > minus_val:
+                    di_info = f" | +DI({plus_val:.1f}) > -DI({minus_val:.1f}) = Bullish"
+                else:
+                    di_info = f" | -DI({minus_val:.1f}) > +DI({plus_val:.1f}) = Bearish"
             
             if adx_val >= adx_threshold:
-                di_info = ""
-                if is_valid_number(plus_di) and is_valid_number(minus_di):
-                    plus_val = safe_float(plus_di, 0.0)
-                    minus_val = safe_float(minus_di, 0.0)
-                    if plus_val > minus_val:
-                        di_info = f" | +DI({plus_val:.1f}) > -DI({minus_val:.1f}) = Bullish"
-                    else:
-                        di_info = f" | -DI({minus_val:.1f}) > +DI({plus_val:.1f}) = Bearish"
-                
-                reason = f"✅ ADX Filter PASSED: ADX({adx_val:.1f}) >= {adx_threshold} (Tren KUAT){di_info}"
-                logger.info(reason)
-                return True, reason, adx_val
+                reason = f"✅ ADX KUAT: ADX({adx_val:.1f}) >= {adx_threshold} (Trending){di_info}"
             else:
-                reason = f"❌ ADX Filter FAILED: ADX({adx_val:.1f}) < {adx_threshold} (Sideways/Ranging Market)"
-                logger.info(reason)
-                return False, reason, adx_val
+                reason = f"✅ ADX RANGING: ADX({adx_val:.1f}) < {adx_threshold} (Sideways OK untuk scalping){di_info}"
+            
+            logger.info(reason)
+            return True, reason, adx_val
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_adx_filter: {e}")
             return True, f"✅ ADX Filter SKIPPED: Error - {str(e)}", 0.0
     
     def check_rsi_level_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
-        """Check RSI level filter untuk menghindari entry di area jenuh.
+        """Check RSI level filter - SCALPING MODE: Non-blocking, hanya info
         
-        Logika:
-        - BUY: RSI harus < 70 (agar masih ada ruang harga naik)
-        - SELL: RSI harus > 30 (agar masih ada ruang harga turun)
+        SCALPING MODE: RSI level tidak memblokir sinyal.
+        Reversal dari overbought/oversold justru peluang scalping bagus.
         
         Args:
             indicators: Dictionary of calculated indicators
             signal_type: 'BUY' or 'SELL'
             
         Returns:
-            Tuple of (is_valid, reason)
+            Tuple of (is_valid, reason) - Selalu True untuk scalping
         """
         try:
-            if not getattr(self.config, 'RSI_LEVEL_FILTER_ENABLED', True):
-                return True, "✅ RSI Level Filter SKIPPED: Filter dinonaktifkan"
-            
             rsi = indicators.get('rsi')
             
             if not is_valid_number(rsi):
-                return True, "✅ RSI Level Filter SKIPPED: RSI data tidak tersedia"
+                return True, "✅ RSI Level: Data tidak tersedia - SCALPING LANJUT"
             
             rsi_val = safe_float(rsi, 50.0)
-            rsi_buy_max = getattr(self.config, 'RSI_BUY_MAX_LEVEL', 70)
-            rsi_sell_min = getattr(self.config, 'RSI_SELL_MIN_LEVEL', 30)
             
             if signal_type == 'BUY':
-                if rsi_val < rsi_buy_max:
-                    reason = f"✅ RSI Level Filter PASSED: RSI({rsi_val:.1f}) < {rsi_buy_max} (Masih ada ruang naik)"
-                    logger.info(reason)
-                    return True, reason
+                if rsi_val < 70:
+                    reason = f"✅ RSI Level IDEAL: RSI({rsi_val:.1f}) < 70 (Ruang naik banyak)"
+                elif rsi_val < 80:
+                    reason = f"✅ RSI Level OK: RSI({rsi_val:.1f}) - Tetap scalp dengan hati-hati"
                 else:
-                    reason = f"❌ RSI Level Filter FAILED: RSI({rsi_val:.1f}) >= {rsi_buy_max} (Overbought - Jangan BUY di pucuk)"
-                    logger.info(reason)
-                    return False, reason
+                    reason = f"⚠️ RSI Level OVERBOUGHT: RSI({rsi_val:.1f}) - REVERSAL SCALP possible"
+                logger.info(reason)
+                return True, reason
             elif signal_type == 'SELL':
-                if rsi_val > rsi_sell_min:
-                    reason = f"✅ RSI Level Filter PASSED: RSI({rsi_val:.1f}) > {rsi_sell_min} (Masih ada ruang turun)"
-                    logger.info(reason)
-                    return True, reason
+                if rsi_val > 30:
+                    reason = f"✅ RSI Level IDEAL: RSI({rsi_val:.1f}) > 30 (Ruang turun banyak)"
+                elif rsi_val > 20:
+                    reason = f"✅ RSI Level OK: RSI({rsi_val:.1f}) - Tetap scalp dengan hati-hati"
                 else:
-                    reason = f"❌ RSI Level Filter FAILED: RSI({rsi_val:.1f}) <= {rsi_sell_min} (Oversold - Jangan SELL di dasar)"
-                    logger.info(reason)
-                    return False, reason
+                    reason = f"⚠️ RSI Level OVERSOLD: RSI({rsi_val:.1f}) - REVERSAL SCALP possible"
+                logger.info(reason)
+                return True, reason
             
-            return True, "✅ RSI Level Filter SKIPPED: Invalid signal type"
+            return True, "✅ RSI Level: SCALPING MODE ACTIVE"
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_rsi_level_filter: {e}")
-            return True, f"✅ RSI Level Filter SKIPPED: Error - {str(e)}"
+            return True, f"✅ RSI Level Filter: Error - {str(e)}"
     
     def check_ema_slope_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
-        """Check EMA slope filter untuk memastikan EMA menukik ke arah tren.
+        """Check EMA slope filter - SCALPING MODE: Non-blocking, hanya info
         
-        Logika:
-        - BUY: EMA harus menukik ke atas (slope positif)
-        - SELL: EMA harus menukik ke bawah (slope negatif)
-        - EMA flat/horizontal = sinyal lemah, hindari trading
+        SCALPING MODE: EMA slope tidak memblokir sinyal.
+        Scalping bisa profit di market flat/ranging juga.
         
         Args:
             indicators: Dictionary of calculated indicators
             signal_type: 'BUY' or 'SELL'
             
         Returns:
-            Tuple of (is_valid, reason)
+            Tuple of (is_valid, reason) - Selalu True untuk scalping
         """
         try:
-            if not getattr(self.config, 'EMA_SLOPE_FILTER_ENABLED', True):
-                return True, "✅ EMA Slope Filter SKIPPED: Filter dinonaktifkan"
-            
             ema_slope = indicators.get('ema_slope')
             
             if not is_valid_number(ema_slope):
-                return True, "✅ EMA Slope Filter SKIPPED: EMA slope data tidak tersedia"
+                return True, "✅ EMA Slope: Data tidak tersedia - SCALPING LANJUT"
             
             slope_val = safe_float(ema_slope, 0.0)
-            min_slope = getattr(self.config, 'EMA_SLOPE_MIN_THRESHOLD', 0.001)
+            min_slope = getattr(self.config, 'EMA_SLOPE_MIN_THRESHOLD', 0.0001)
             
             if signal_type == 'BUY':
                 if slope_val > min_slope:
-                    reason = f"✅ EMA Slope Filter PASSED: Slope({slope_val:.4f}%) > 0 (EMA menukik ke ATAS ↗)"
+                    reason = f"✅ EMA Slope BULLISH: Slope({slope_val:.4f}%) > 0 (EMA menukik ke ATAS ↗)"
                     logger.info(reason)
                     return True, reason
                 elif slope_val > -min_slope:
-                    reason = f"⚠️ EMA Slope Filter WARNING: Slope({slope_val:.4f}%) mendatar (EMA FLAT - hati-hati)"
+                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk scalping ranging"
                     logger.info(reason)
                     return True, reason
                 else:
-                    reason = f"❌ EMA Slope Filter FAILED: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘ - tidak cocok untuk BUY)"
+                    reason = f"✅ EMA Slope BEARISH: Slope({slope_val:.4f}%) - REVERSAL SCALP possible untuk BUY"
                     logger.info(reason)
-                    return False, reason
+                    return True, reason
             elif signal_type == 'SELL':
                 if slope_val < -min_slope:
-                    reason = f"✅ EMA Slope Filter PASSED: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘)"
+                    reason = f"✅ EMA Slope BEARISH: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘)"
                     logger.info(reason)
                     return True, reason
                 elif slope_val < min_slope:
-                    reason = f"⚠️ EMA Slope Filter WARNING: Slope({slope_val:.4f}%) mendatar (EMA FLAT - hati-hati)"
+                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk scalping ranging"
                     logger.info(reason)
                     return True, reason
                 else:
-                    reason = f"❌ EMA Slope Filter FAILED: Slope({slope_val:.4f}%) > 0 (EMA menukik ke ATAS ↗ - tidak cocok untuk SELL)"
+                    reason = f"✅ EMA Slope BULLISH: Slope({slope_val:.4f}%) - REVERSAL SCALP possible untuk SELL"
                     logger.info(reason)
-                    return False, reason
+                    return True, reason
             
-            return True, "✅ EMA Slope Filter SKIPPED: Invalid signal type"
+            return True, "✅ EMA Slope: SCALPING MODE ACTIVE"
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_ema_slope_filter: {e}")
@@ -1136,8 +1104,8 @@ class TradingStrategy:
             
             volume_ratio = safe_divide(volume, volume_avg, 1.0, "volume_ratio")
             
-            volume_threshold_low = 0.50
-            volume_threshold_standard = 0.80
+            volume_threshold_low = 0.20
+            volume_threshold_standard = 0.30
             
             volume_acceptable = volume_ratio >= volume_threshold_low
             volume_strong = volume_ratio >= volume_threshold_standard
@@ -1179,13 +1147,13 @@ class TradingStrategy:
                 logger.info(reason)
                 return True, reason
             else:
-                reason = f"❌ Volume/VWAP Filter FAILED: Volume too low [{volume_ratio:.1%}] < {volume_threshold_low:.0%} minimum"
-                logger.debug(reason)
-                return False, reason
+                reason = f"✅ Volume LOW tapi OK untuk SCALPING: Volume [{volume_ratio:.1%}] - LANJUT"
+                logger.info(reason)
+                return True, reason
             
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_volume_vwap_filter: {e}")
-            return False, f"Error: {str(e)}"
+            return True, f"✅ Volume Filter: Error - scalping tetap lanjut"
     
     def check_price_action_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str, int]:
         """Check price action confirmation - RELAXED 2-TIER VERSION
@@ -1330,9 +1298,9 @@ class TradingStrategy:
                     logger.info(reason)
                     return True, reason, 12
             
-            reason = "❌ Price Action Filter FAILED: No confirmation detected in any tier"
+            reason = "✅ Price Action: No pattern detected - SCALPING tetap lanjut tanpa pattern"
             logger.info(reason)
-            return False, reason, 0
+            return True, reason, 5
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_price_action_confirmation: {e}")
@@ -1515,13 +1483,13 @@ class TradingStrategy:
             
             adjusted_score = result['weighted_score'] * (2.0 - volatility_adj)
             
-            auto_threshold = 60.0
+            auto_threshold = 30.0
             
-            core_filters_passed = trend_passed and adx_passed and rsi_level_passed
-            supporting_filters = momentum_passed or volume_passed or pa_passed
+            core_filters_passed = trend_passed
+            supporting_filters = momentum_passed or volume_passed or pa_passed or adx_passed or rsi_level_passed
             score_threshold_met = adjusted_score >= auto_threshold
             
-            result['all_mandatory_passed'] = core_filters_passed and supporting_filters and score_threshold_met
+            result['all_mandatory_passed'] = core_filters_passed and (supporting_filters or score_threshold_met)
             
             volatility_info = ""
             if volatility_adj != 1.0:

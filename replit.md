@@ -64,6 +64,21 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
+- **2025-11-27:** SCALPING MODE AGGRESSIVE - Major relaxation of signal filters:
+  - Threshold score AUTO diturunkan dari 60% ke 30%
+  - Threshold score MANUAL diturunkan dari 40% ke 20%
+  - ADX Filter DISABLED - Tidak lagi memblokir market sideways/ranging
+  - Session Filter DISABLED - Trading 24/7 diizinkan semua sesi
+  - EMA Slope Filter DISABLED - Tidak lagi memblokir sinyal
+  - RSI Level Filter DISABLED - Tidak lagi memblokir di overbought/oversold
+  - Volume threshold diturunkan dari 80% ke 30%
+  - RSI entry range diperluas dari [25-75] ke [15-85]
+  - Stochastic levels diperluas dari [15-85] ke [10-90]
+  - SIGNAL_MINIMUM_PRICE_MOVEMENT diturunkan dari 0.50 ke 0.05
+  - TICK_COOLDOWN_FOR_SAME_SIGNAL diset ke 0 untuk unlimited sinyal
+  - Max spread ditingkatkan dari 20 ke 50 pips
+  - Logika mandatory filters diubah dari AND ke OR untuk lebih banyak sinyal
+  - Semua filter sekarang informational only, tidak blocking
 - **2025-11-27:** Added 5 optimization filters to reduce false signals in sideways markets:
   - ADX Filter: Minimum trend strength (ADX >= 20) to skip ranging markets
   - RSI Level Filter: Prevents BUY at overbought (>70) and SELL at oversold (<30)

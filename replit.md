@@ -64,7 +64,14 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
-- **2025-11-27 (CURRENT):** SESSION LIFECYCLE & SIGNAL BLOCKING FIX:
+- **2025-11-27 (CURRENT):** DASHBOARD ENHANCEMENT & BOT VERIFICATION:
+  - Enhanced dashboard display: Now shows Trailing Stop / Dynamic SL status dengan jumlah adjustment
+  - New "Profit Terkunci" indicator: Displays locked-in profit when trailing stop is active
+  - Verified bot functionality: 5 positions created and closed successfully
+  - Bot NOT stuck: New signals created within 35-45 seconds after position closes (waiting for M1 candle close)
+  - Trailing stop working: Successfully moved SL to lock in profits (+$1.19, +$0.68)
+  - Tested scenarios: TP approach (100% progress), trailing stop activation, dynamic SL protection
+- **2025-11-27:** SESSION LIFECYCLE & SIGNAL BLOCKING FIX:
   - Fixed critical bug: `close_position` now calls `signal_session_manager.end_session()` to allow new signals after position close
   - Fixed monitoring loop: Optimized to recheck positions every 0.5s when blocked (not wait for global_cooldown)
   - Fixed reentrant logging: Signal handler in main.py uses `loop.call_soon_threadsafe()` for thread-safe logging

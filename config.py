@@ -510,11 +510,12 @@ class Config:
     SIGNAL_SCORE_THRESHOLD_MANUAL = _get_int_env('SIGNAL_SCORE_THRESHOLD_MANUAL', '20')
     
     SL_ATR_MULTIPLIER = _get_float_env('SL_ATR_MULTIPLIER', '1.2')
-    MIN_SL_PIPS = _get_float_env('MIN_SL_PIPS', '15.0')
+    MIN_SL_PIPS = _get_float_env('MIN_SL_PIPS', '10.0')
     MIN_SL_SPREAD_MULTIPLIER = _get_float_env('MIN_SL_SPREAD_MULTIPLIER', '2.0')
     DEFAULT_SL_PIPS = _get_float_env('DEFAULT_SL_PIPS', '20.0')
     TP_RR_RATIO = _get_float_env('TP_RR_RATIO', '1.5')
-    DEFAULT_TP_PIPS = _get_float_env('DEFAULT_TP_PIPS', '30.0')
+    TP_RR_RATIO_MAX = _get_float_env('TP_RR_RATIO_MAX', '2.5')
+    DEFAULT_TP_PIPS = _get_float_env('DEFAULT_TP_PIPS', '40.0')
     
     SIGNAL_COOLDOWN_SECONDS = _get_int_env('SIGNAL_COOLDOWN_SECONDS', '0')
     MAX_TRADES_PER_DAY = _get_int_env('MAX_TRADES_PER_DAY', '0')
@@ -524,14 +525,14 @@ class Config:
     AUTO_SIGNAL_REPLACEMENT_ALLOWED = os.getenv('AUTO_SIGNAL_REPLACEMENT_ALLOWED', 'false').lower() == 'true'
     CANDLE_CLOSE_ONLY_SIGNALS = os.getenv('CANDLE_CLOSE_ONLY_SIGNALS', 'true').lower() == 'true'
     DAILY_LOSS_PERCENT = _get_float_env('DAILY_LOSS_PERCENT', '0.0')
-    RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '1.0')
-    FIXED_RISK_AMOUNT = _get_float_env('FIXED_RISK_AMOUNT', '1.0')
+    RISK_PER_TRADE_PERCENT = _get_float_env('RISK_PER_TRADE_PERCENT', '20.0')
+    FIXED_RISK_AMOUNT = _get_float_env('FIXED_RISK_AMOUNT', '2.0')
     
     DYNAMIC_SL_LOSS_THRESHOLD = _get_float_env('DYNAMIC_SL_LOSS_THRESHOLD', '1.0')
     DYNAMIC_SL_TIGHTENING_MULTIPLIER = _get_float_env('DYNAMIC_SL_TIGHTENING_MULTIPLIER', '0.5')
     BREAKEVEN_PROFIT_THRESHOLD = _get_float_env('BREAKEVEN_PROFIT_THRESHOLD', '0.5')
     TRAILING_STOP_PROFIT_THRESHOLD = _get_float_env('TRAILING_STOP_PROFIT_THRESHOLD', '1.0')
-    TRAILING_STOP_DISTANCE_PIPS = _get_float_env('TRAILING_STOP_DISTANCE_PIPS', '5.0')
+    TRAILING_STOP_DISTANCE_PIPS = _get_float_env('TRAILING_STOP_DISTANCE_PIPS', '3.0')
     
     CHART_AUTO_DELETE = os.getenv('CHART_AUTO_DELETE', 'true').lower() == 'true'
     CHART_EXPIRY_MINUTES = _get_int_env('CHART_EXPIRY_MINUTES', '60')
@@ -555,11 +556,13 @@ class Config:
     MTF_ENABLED = os.getenv('MTF_ENABLED', 'true').lower() == 'true'
     MTF_CONFIRMATION_TIMEFRAME = os.getenv('MTF_CONFIRMATION_TIMEFRAME', 'M15')
     
-    ACCOUNT_BALANCE = _get_float_env('ACCOUNT_BALANCE', '15000')
-    ACCOUNT_CURRENCY = os.getenv('ACCOUNT_CURRENCY', 'IDR')
+    ACCOUNT_BALANCE = _get_float_env('ACCOUNT_BALANCE', '10.0')
+    ACCOUNT_CURRENCY = os.getenv('ACCOUNT_CURRENCY', 'USD')
     
     XAUUSD_PIP_VALUE = 10.0
     LOT_SIZE = 0.01
+    
+    TRAILING_STOP_NOTIFY_COOLDOWN = _get_float_env('TRAILING_STOP_NOTIFY_COOLDOWN', '30.0')
     
     @classmethod
     def check_memory_status(cls) -> dict:

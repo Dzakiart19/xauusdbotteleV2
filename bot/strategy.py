@@ -1873,18 +1873,26 @@ class TradingStrategy:
                         logger.warning(f"Invalid ATR: {atr}, using default 1.0")
                         atr = 1.0
                     
-                    if signal_source == 'auto':
-                        sl_atr_mult = safe_float(self.config.SL_ATR_MULTIPLIER, 1.5, "SL_ATR_MULTIPLIER")
-                        default_sl_pips = safe_float(self.config.DEFAULT_SL_PIPS, 10.0, "DEFAULT_SL_PIPS")
-                        pip_value = safe_float(self.config.XAUUSD_PIP_VALUE, 10.0, "XAUUSD_PIP_VALUE")
-                        
-                        if pip_value <= 0:
-                            logger.warning(f"Invalid pip value: {pip_value}, using default 10.0")
-                            pip_value = 10.0
-                        
-                        sl_distance = max(atr * sl_atr_mult, safe_divide(default_sl_pips, pip_value, 1.0, "sl_distance_calc"))
-                    else:
-                        sl_distance = max(atr * 1.2, 1.0)
+                    fixed_risk_amount = safe_float(self.config.FIXED_RISK_AMOUNT, 2.0, "FIXED_RISK_AMOUNT")
+                    lot_size_cfg = safe_float(self.config.LOT_SIZE, 0.01, "LOT_SIZE")
+                    pip_value = safe_float(self.config.XAUUSD_PIP_VALUE, 10.0, "XAUUSD_PIP_VALUE")
+                    
+                    if pip_value <= 0:
+                        logger.warning(f"Invalid pip value: {pip_value}, using default 10.0")
+                        pip_value = 10.0
+                    
+                    dollar_per_pip = pip_value * lot_size_cfg
+                    sl_pips_from_risk = fixed_risk_amount / dollar_per_pip if dollar_per_pip > 0 else 20.0
+                    sl_from_risk = sl_pips_from_risk / pip_value
+                    
+                    sl_atr_mult = safe_float(self.config.SL_ATR_MULTIPLIER, 1.5, "SL_ATR_MULTIPLIER")
+                    default_sl_pips = safe_float(self.config.DEFAULT_SL_PIPS, 10.0, "DEFAULT_SL_PIPS")
+                    sl_from_atr = atr * sl_atr_mult
+                    sl_from_default = safe_divide(default_sl_pips, pip_value, 1.0, "sl_distance_calc")
+                    
+                    sl_distance = min(sl_from_risk, max(sl_from_atr, sl_from_default))
+                    
+                    logger.info(f"💰 Fixed-Risk SL ({signal_source}): Risk=${fixed_risk_amount:.2f}, $/pip=${dollar_per_pip:.2f}, MaxSL={sl_pips_from_risk:.1f}pips, Selected={sl_distance * pip_value:.1f}pips")
                     
                     if not is_valid_number(sl_distance) or sl_distance <= 0 or sl_distance > 100:
                         logger.error(f"Invalid SL distance: {sl_distance}")
@@ -1928,18 +1936,16 @@ class TradingStrategy:
                         logger.error(f"Invalid TP pips: {tp_pips}")
                         return None
                     
-                    fixed_risk = safe_float(self.config.FIXED_RISK_AMOUNT, 10.0, "FIXED_RISK_AMOUNT")
-                    default_lot = safe_float(self.config.LOT_SIZE, 0.01, "LOT_SIZE")
+                    fixed_risk = safe_float(self.config.FIXED_RISK_AMOUNT, 2.0, "FIXED_RISK_AMOUNT")
+                    lot_size = safe_float(self.config.LOT_SIZE, 0.01, "LOT_SIZE")
                     
-                    lot_size = safe_divide(fixed_risk, sl_pips, default_lot, "lot_size_calc")
-                    lot_size = float(max(0.01, min(lot_size, 1.0)))
+                    pip_value_recheck = safe_float(self.config.XAUUSD_PIP_VALUE, 10.0, "XAUUSD_PIP_VALUE")
+                    actual_dollar_per_pip = pip_value_recheck * lot_size
+                    expected_loss = sl_pips * actual_dollar_per_pip
+                    expected_profit = tp_pips * actual_dollar_per_pip
                     
-                    if not is_valid_number(lot_size):
-                        logger.warning(f"Invalid lot size calculated: {lot_size}, using default")
-                        lot_size = default_lot
-                    
-                    expected_loss = fixed_risk
-                    expected_profit = expected_loss * dynamic_tp_ratio
+                    if expected_loss > fixed_risk * 1.1:
+                        logger.warning(f"Expected loss ${expected_loss:.2f} exceeds fixed risk ${fixed_risk:.2f} - SL may need adjustment")
                     
                     if not is_valid_number(expected_profit):
                         logger.warning(f"Invalid expected_profit: {expected_profit}")

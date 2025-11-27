@@ -263,15 +263,27 @@ class RiskManager:
     def calculate_dynamic_sl(self, entry_price: float, signal_type: str, 
                             atr: float, spread: float) -> Tuple[float, float]:
         try:
+            fixed_risk = getattr(self.config, 'FIXED_RISK_AMOUNT', 2.0)
+            lot_size = getattr(self.config, 'LOT_SIZE', 0.01)
+            pip_value = getattr(self.config, 'XAUUSD_PIP_VALUE', 10.0)
+            
+            dollar_per_pip = pip_value * lot_size
+            sl_pips_from_risk = fixed_risk / dollar_per_pip if dollar_per_pip > 0 else 20.0
+            sl_from_risk = sl_pips_from_risk / pip_value
+            
             sl_from_atr = atr * self.config.SL_ATR_MULTIPLIER
-            
             sl_from_min = self.config.MIN_SL_PIPS / self.config.XAUUSD_PIP_VALUE
-            
             sl_from_spread = spread * self.config.MIN_SL_SPREAD_MULTIPLIER
             
-            sl_distance = max(sl_from_atr, sl_from_min, sl_from_spread)
+            sl_distance = min(sl_from_risk, max(sl_from_atr, sl_from_min, sl_from_spread))
             
-            tp_distance = sl_distance * self.config.TP_RR_RATIO
+            min_tp_ratio = getattr(self.config, 'TP_RR_RATIO', 1.5)
+            max_tp_ratio = getattr(self.config, 'TP_RR_RATIO_MAX', 2.5)
+            
+            trend_strength = getattr(self, '_last_trend_strength', 0.5)
+            dynamic_tp_ratio = min_tp_ratio + (max_tp_ratio - min_tp_ratio) * trend_strength
+            
+            tp_distance = sl_distance * dynamic_tp_ratio
             
             if signal_type == 'BUY':
                 sl_price = entry_price - sl_distance
@@ -282,12 +294,15 @@ class RiskManager:
             
             sl_pips = sl_distance * self.config.XAUUSD_PIP_VALUE
             tp_pips = tp_distance * self.config.XAUUSD_PIP_VALUE
+            expected_loss = sl_pips * dollar_per_pip
+            expected_profit = tp_pips * dollar_per_pip
             
-            logger.info(f"Dynamic SL/TP calculated for {signal_type}: "
-                       f"Entry={entry_price:.2f}, SL={sl_price:.2f} ({sl_pips:.1f} pips), "
-                       f"TP={tp_price:.2f} ({tp_pips:.1f} pips)")
-            logger.debug(f"SL components - ATR: {sl_from_atr:.4f}, Min: {sl_from_min:.4f}, "
-                        f"Spread: {sl_from_spread:.4f} -> Selected: {sl_distance:.4f}")
+            logger.info(f"💰 Fixed-Risk SL/TP for {signal_type}: "
+                       f"Entry=${entry_price:.2f}, SL=${sl_price:.2f} ({sl_pips:.1f} pips), "
+                       f"TP=${tp_price:.2f} ({tp_pips:.1f} pips)")
+            logger.info(f"📊 Expected: Max Loss=${expected_loss:.2f}, Target Profit=${expected_profit:.2f}, R:R=1:{dynamic_tp_ratio:.1f}")
+            logger.debug(f"SL components - Risk-based: {sl_from_risk:.4f}, ATR: {sl_from_atr:.4f}, "
+                        f"Min: {sl_from_min:.4f}, Spread: {sl_from_spread:.4f} -> Selected: {sl_distance:.4f}")
             
             return sl_price, tp_price
             

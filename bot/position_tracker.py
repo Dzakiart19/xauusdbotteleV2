@@ -145,6 +145,9 @@ class PositionTracker:
         self.long_running_threshold = LONG_RUNNING_TASK_THRESHOLD
         self.auto_cancel_threshold = TASK_AUTO_CANCEL_THRESHOLD
         self.slow_task_alert_count = SLOW_TASK_ALERT_COUNT
+        
+        self._trailing_stop_last_notify: Dict[int, datetime] = {}
+        self._trailing_stop_notify_cooldown = getattr(config, 'TRAILING_STOP_NOTIFY_COOLDOWN', 30.0)
     
     def _on_task_done(self, task: asyncio.Task, task_name: Optional[str] = None) -> None:
         """Callback invoked when a tracked task completes.
@@ -1051,7 +1054,11 @@ class PositionTracker:
                 sl_adjusted = True
                 logger.info(f"💎 Trailing stop activated! Profit ${unrealized_pl:.2f}. SL moved to ${new_trailing_sl:.2f} (lock-in profit)")
                 
-                if self.telegram_app:
+                now = datetime.now(pytz.UTC)
+                last_notify = self._trailing_stop_last_notify.get(position_id)
+                should_notify = last_notify is None or (now - last_notify).total_seconds() >= self._trailing_stop_notify_cooldown
+                
+                if should_notify and self.telegram_app:
                     try:
                         msg = (
                             f"💎 *Trailing Stop Active*\n\n"
@@ -1066,6 +1073,7 @@ class PositionTracker:
                             self.telegram_app.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown'),
                             timeout=NOTIFICATION_TIMEOUT
                         )
+                        self._trailing_stop_last_notify[position_id] = now
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending trailing stop notification to user {user_id}")
                     except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
@@ -1078,7 +1086,11 @@ class PositionTracker:
                 sl_adjusted = True
                 logger.info(f"💎 Trailing stop activated! Profit ${unrealized_pl:.2f}. SL moved to ${new_trailing_sl:.2f} (lock-in profit)")
                 
-                if self.telegram_app:
+                now = datetime.now(pytz.UTC)
+                last_notify = self._trailing_stop_last_notify.get(position_id)
+                should_notify = last_notify is None or (now - last_notify).total_seconds() >= self._trailing_stop_notify_cooldown
+                
+                if should_notify and self.telegram_app:
                     try:
                         msg = (
                             f"💎 *Trailing Stop Active*\n\n"
@@ -1093,6 +1105,7 @@ class PositionTracker:
                             self.telegram_app.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown'),
                             timeout=NOTIFICATION_TIMEOUT
                         )
+                        self._trailing_stop_last_notify[position_id] = now
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout sending trailing stop notification to user {user_id}")
                     except (RetryAfter, TimedOut, BadRequest, Forbidden, NetworkError, TelegramError) as e:
@@ -1289,6 +1302,8 @@ class PositionTracker:
                     del self.active_positions[user_id][position_id]
                     if not self.active_positions[user_id]:
                         del self.active_positions[user_id]
+            
+            self._trailing_stop_last_notify.pop(position_id, None)
             
             logger.info(f"Position closed - User:{user_id} ID:{position_id} {reason} P/L:${actual_pl:.2f}")
             

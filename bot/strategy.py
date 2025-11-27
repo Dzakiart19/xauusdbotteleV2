@@ -934,16 +934,16 @@ class TradingStrategy:
             return False, f"Error: {str(e)}"
     
     def check_adx_filter(self, indicators: Dict) -> Tuple[bool, str, float]:
-        """Check ADX filter - SCALPING MODE: Non-blocking, hanya info
+        """Check ADX filter - BLOCKING jika ADX < 15 (trend terlalu lemah)
         
-        SCALPING MODE: ADX filter tidak memblokir sinyal.
-        Market sideways tetap bisa di-scalp dengan teknik yang benar.
+        ADX filter akan MEMBLOKIR sinyal jika ADX < 15 untuk mengurangi false signals.
+        Hanya sinyal dengan trend yang cukup kuat yang akan diizinkan.
         
         Args:
             indicators: Dictionary of calculated indicators
             
         Returns:
-            Tuple of (is_valid, reason, adx_value) - Selalu True untuk scalping
+            Tuple of (is_valid, reason, adx_value) - False jika ADX < 15
         """
         try:
             adx = indicators.get('adx')
@@ -951,7 +951,7 @@ class TradingStrategy:
             minus_di = indicators.get('minus_di')
             
             if not is_valid_number(adx):
-                return True, "✅ ADX Info: Data tidak tersedia - SCALPING LANJUT", 0.0
+                return True, "✅ ADX Info: Data tidak tersedia - signal diizinkan", 0.0
             
             adx_val = safe_float(adx, 0.0)
             adx_threshold = getattr(self.config, 'ADX_THRESHOLD', 15)
@@ -967,11 +967,12 @@ class TradingStrategy:
             
             if adx_val >= adx_threshold:
                 reason = f"✅ ADX KUAT: ADX({adx_val:.1f}) >= {adx_threshold} (Trending){di_info}"
+                logger.info(reason)
+                return True, reason, adx_val
             else:
-                reason = f"✅ ADX RANGING: ADX({adx_val:.1f}) < {adx_threshold} (Sideways OK untuk scalping){di_info}"
-            
-            logger.info(reason)
-            return True, reason, adx_val
+                reason = f"❌ ADX LEMAH: ADX({adx_val:.1f}) < {adx_threshold} (Trend terlalu lemah){di_info}"
+                logger.info(reason)
+                return False, reason, adx_val
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_adx_filter: {e}")
@@ -1024,23 +1025,23 @@ class TradingStrategy:
             return True, f"✅ RSI Level Filter: Error - {str(e)}"
     
     def check_ema_slope_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
-        """Check EMA slope filter - SCALPING MODE: Non-blocking, hanya info
+        """Check EMA slope filter - BLOCKING jika slope berlawanan dengan signal direction
         
-        SCALPING MODE: EMA slope tidak memblokir sinyal.
-        Scalping bisa profit di market flat/ranging juga.
+        EMA slope filter akan MEMBLOKIR sinyal jika slope berlawanan dengan arah sinyal.
+        Ini mengurangi false signals dengan memastikan trend searah.
         
         Args:
             indicators: Dictionary of calculated indicators
             signal_type: 'BUY' or 'SELL'
             
         Returns:
-            Tuple of (is_valid, reason) - Selalu True untuk scalping
+            Tuple of (is_valid, reason) - False jika slope berlawanan dengan signal
         """
         try:
             ema_slope = indicators.get('ema_slope')
             
             if not is_valid_number(ema_slope):
-                return True, "✅ EMA Slope: Data tidak tersedia - SCALPING LANJUT"
+                return True, "✅ EMA Slope: Data tidak tersedia - signal diizinkan"
             
             slope_val = safe_float(ema_slope, 0.0)
             min_slope = getattr(self.config, 'EMA_SLOPE_MIN_THRESHOLD', 0.0001)
@@ -1051,28 +1052,28 @@ class TradingStrategy:
                     logger.info(reason)
                     return True, reason
                 elif slope_val > -min_slope:
-                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk scalping ranging"
+                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk BUY"
                     logger.info(reason)
                     return True, reason
                 else:
-                    reason = f"✅ EMA Slope BEARISH: Slope({slope_val:.4f}%) - REVERSAL SCALP possible untuk BUY"
+                    reason = f"❌ EMA Slope BEARISH: Slope({slope_val:.4f}%) berlawanan dengan BUY signal"
                     logger.info(reason)
-                    return True, reason
+                    return False, reason
             elif signal_type == 'SELL':
                 if slope_val < -min_slope:
                     reason = f"✅ EMA Slope BEARISH: Slope({slope_val:.4f}%) < 0 (EMA menukik ke BAWAH ↘)"
                     logger.info(reason)
                     return True, reason
                 elif slope_val < min_slope:
-                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk scalping ranging"
+                    reason = f"✅ EMA Slope FLAT: Slope({slope_val:.4f}%) - OK untuk SELL"
                     logger.info(reason)
                     return True, reason
                 else:
-                    reason = f"✅ EMA Slope BULLISH: Slope({slope_val:.4f}%) - REVERSAL SCALP possible untuk SELL"
+                    reason = f"❌ EMA Slope BULLISH: Slope({slope_val:.4f}%) berlawanan dengan SELL signal"
                     logger.info(reason)
-                    return True, reason
+                    return False, reason
             
-            return True, "✅ EMA Slope: SCALPING MODE ACTIVE"
+            return True, "✅ EMA Slope: signal diizinkan"
                 
         except (StrategyError, Exception) as e:
             logger.error(f"Error in check_ema_slope_filter: {e}")

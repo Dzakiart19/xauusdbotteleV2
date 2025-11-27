@@ -668,7 +668,7 @@ class MarketDataClient:
         self.subscriber_lock = asyncio.Lock()
         self.max_consecutive_failures = 5
         self.subscriber_stale_timeout = 300
-        self.subscriber_zombie_timeout = 120
+        self.subscriber_zombie_timeout = 300
         self.subscriber_cleanup_interval = 60
         self.high_drop_rate_threshold = 0.3
         self.high_drop_rate_warning_interval = 30

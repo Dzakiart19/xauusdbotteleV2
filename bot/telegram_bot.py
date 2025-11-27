@@ -1602,11 +1602,14 @@ class TradingBot:
         retry_delay = 1.0
         max_retry_delay = 30.0
         last_candle_timestamp = None  # Tracking timestamp candle terakhir untuk detect candle baru
+        consecutive_timeouts = 0
+        MAX_CONSECUTIVE_TIMEOUTS = 5
         
         try:
             while self.monitoring and chat_id in self.monitoring_chats and not self._is_shutting_down:
                 try:
                     tick = await asyncio.wait_for(tick_queue.get(), timeout=30.0)
+                    consecutive_timeouts = 0
                     
                     now = datetime.now()
                     
@@ -1756,7 +1759,20 @@ class TradingBot:
                                         retry_delay = 1.0
                     
                 except asyncio.TimeoutError:
-                    logger.debug(f"Tick queue timeout untuk user {mask_user_id(chat_id)}, mencoba lagi...")
+                    consecutive_timeouts += 1
+                    logger.debug(f"Tick queue timeout untuk user {mask_user_id(chat_id)} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS}), mencoba lagi...")
+                    
+                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                        try:
+                            logger.info(f"🔄 Re-subscribing setelah {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts untuk user {mask_user_id(chat_id)}")
+                            await self.market_data.unsubscribe_ticks(f'telegram_bot_{chat_id}')
+                            tick_queue = await self.market_data.subscribe_ticks(f'telegram_bot_{chat_id}')
+                            consecutive_timeouts = 0
+                            logger.info(f"✅ Re-subscribed berhasil untuk user {mask_user_id(chat_id)}")
+                        except Exception as resubscribe_error:
+                            logger.error(f"❌ Error saat re-subscribe untuk user {mask_user_id(chat_id)}: {resubscribe_error}")
+                            await asyncio.sleep(5.0)
+                    
                     continue
                 except asyncio.CancelledError:
                     logger.info(f"Monitoring loop cancelled for user {mask_user_id(chat_id)}")

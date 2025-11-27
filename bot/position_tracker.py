@@ -1628,18 +1628,17 @@ class PositionTracker:
         return {uid: pos.copy() for uid, pos in self.active_positions.items()}
     
     async def has_active_position_async(self, user_id: int) -> bool:
-        """Thread-safe check for active position with multi-source verification including DB fallback"""
-        # Check 1: SignalSessionManager
-        if self.signal_session_manager:
-            if self.signal_session_manager.has_active_session(user_id):
-                return True
+        """Thread-safe check for active position with multi-source verification including DB fallback
         
-        # Check 2: In-memory cache (with lock)
+        NOTE: Does NOT check SignalSessionManager to avoid circular dependency
+        Session != Position. Session tracks pending signal, Position tracks actual trade.
+        """
+        # Check 1: In-memory cache (with lock)
         async with self._position_lock:
             if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
                 return True
         
-        # Check 3: Database fallback (critical for restart scenarios)
+        # Check 2: Database fallback (critical for restart scenarios)
         db_has_active = await self.verify_active_position_in_db(user_id)
         if db_has_active:
             logger.debug(f"Active position found in DB for user {user_id} (not in cache/session)")
@@ -1651,16 +1650,13 @@ class PositionTracker:
         """Check if user has active position with multi-source verification including DB fallback
         
         Checks multiple sources for redundancy:
-        1. SignalSessionManager (if available)
-        2. In-memory active_positions cache
-        3. Database fallback (critical for restart scenarios)
-        """
-        # Check 1: SignalSessionManager
-        if self.signal_session_manager:
-            if self.signal_session_manager.has_active_session(user_id):
-                return True
+        1. In-memory active_positions cache
+        2. Database fallback (critical for restart scenarios)
         
-        # Check 2: In-memory cache
+        NOTE: Does NOT check SignalSessionManager to avoid circular dependency
+        Session != Position. Session tracks pending signal, Position tracks actual trade.
+        """
+        # Check 1: In-memory cache
         if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
             return True
         

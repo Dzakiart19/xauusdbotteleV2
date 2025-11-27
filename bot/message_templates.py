@@ -115,7 +115,7 @@ class MessageFormatter:
     
     @staticmethod
     def position_update(position_data: dict) -> str:
-        """Format update posisi real-time"""
+        """Format update posisi real-time dengan info trailing stop dan dynamic SL"""
         signal_type = _safe_string(position_data.get('signal_type'), 'UNKNOWN')
         direction_icon = "🟢" if signal_type == 'BUY' else "🔴"
         
@@ -124,6 +124,9 @@ class MessageFormatter:
         sl = _safe_numeric(position_data.get('stop_loss', 0), 0)
         tp = _safe_numeric(position_data.get('take_profit', 0), 0)
         pl = _safe_numeric(position_data.get('unrealized_pl', 0), 0)
+        original_sl = _safe_numeric(position_data.get('original_stop_loss', sl), sl)
+        sl_adjustment_count = int(_safe_numeric(position_data.get('sl_adjustment_count', 0), 0))
+        max_profit = _safe_numeric(position_data.get('max_profit_reached', 0), 0)
         
         if entry == 0:
             price_change = 0
@@ -151,16 +154,25 @@ class MessageFormatter:
         pl_icon = "💰" if pl >= 0 else "📉"
         pl_text = f"+${pl:.2f}" if pl >= 0 else f"-${abs(pl):.2f}"
         
+        sl_status = ""
+        trailing_info = ""
+        if sl_adjustment_count > 0:
+            if max_profit > 0:
+                sl_status = f"\n💎 _Trailing Stop ({sl_adjustment_count}x)_"
+                trailing_info = f"\n🔒 *Profit Terkunci:* `+${max_profit:.2f}`"
+            else:
+                sl_status = f"\n🛡️ _Dynamic SL ({sl_adjustment_count}x)_"
+        
         msg = (
             f"{direction_icon} *POSISI {signal_type} AKTIF*\n"
             f"{'━' * 32}\n\n"
             f"📍 *Entry:* `${entry:.2f}`\n"
             f"📊 *Current:* `${current:.2f}` ({price_change_pct:+.3f}%)\n"
-            f"{pl_icon} *P/L:* `{pl_text}`\n\n"
+            f"{pl_icon} *P/L:* `{pl_text}`{trailing_info}\n\n"
             f"🎯 *Progress ke TP:*\n"
             f"{tp_bar} {tp_progress:.1f}%\n"
             f"Target: `${tp:.2f}`\n\n"
-            f"🛡️ *Stop Loss:* `${sl:.2f}`\n"
+            f"🛡️ *Stop Loss:* `${sl:.2f}`{sl_status}\n"
             f"⚠️ Risk: {sl_progress:.1f}%\n\n"
             f"⏰ {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"
         )

@@ -2301,6 +2301,8 @@ class TradingBot:
                         entry_price = position_db.entry_price
                         stop_loss = position_db.stop_loss
                         take_profit = position_db.take_profit
+                        sl_adjustment_count = getattr(position_db, 'sl_adjustment_count', 0) or 0
+                        max_profit_reached = getattr(position_db, 'max_profit_reached', 0) or 0
                         
                         unrealized_pl = self.risk_manager.calculate_pl(entry_price, current_price, signal_type)
                         
@@ -2310,7 +2312,9 @@ class TradingBot:
                             'current_price': current_price,
                             'stop_loss': stop_loss,
                             'take_profit': take_profit,
-                            'unrealized_pl': unrealized_pl
+                            'unrealized_pl': unrealized_pl,
+                            'sl_adjustment_count': sl_adjustment_count,
+                            'max_profit_reached': max_profit_reached
                         }
                         
                         message_text = MessageFormatter.position_update(position_data)

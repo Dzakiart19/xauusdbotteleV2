@@ -1913,15 +1913,7 @@ class TradingBot:
             if not can_proceed:
                 logger.warning(f"🚫 Duplicate signal blocked for user {mask_user_id(user_id)}: {signal['signal']} @${signal['entry_price']:.2f}")
                 return
-            
-            # STRICT CHECK: Block if user already has active position
-            if self.signal_session_manager:
-                if self.signal_session_manager.has_active_session(user_id):
-                    logger.warning(f"🚫 Signal blocked - user {mask_user_id(user_id)} already has active session")
-                    await self._rollback_signal_cache(user_id, signal['signal'], signal['entry_price'])
-                    return
 
-            # Also check position tracker as backup
             if self.position_tracker.has_active_position(user_id):
                 logger.warning(f"🚫 Signal blocked - user {mask_user_id(user_id)} already has active position (position_tracker)")
                 await self._rollback_signal_cache(user_id, signal['signal'], signal['entry_price'])
@@ -2964,17 +2956,6 @@ class TradingBot:
                     parse_mode='Markdown'
                 )
                 return
-            
-            if self.signal_session_manager:
-                await self.signal_session_manager.create_session(
-                    user_id,
-                    f"manual_{int(time.time())}",
-                    'manual',
-                    signal['signal'],
-                    signal['entry_price'],
-                    signal['stop_loss'],
-                    signal['take_profit']
-                )
             
             await self._send_signal(user_id, update.effective_chat.id, signal, df_m1)
             self.risk_manager.record_signal(user_id)

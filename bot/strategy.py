@@ -522,35 +522,44 @@ class TradingStrategy:
                 ema_long is not None and close is not None and close > 0):
                 ema_separation = safe_divide(abs(ema_short - ema_long), close, 0.0, "ema_separation")
                 if is_valid_number(ema_separation):
-                    if ema_separation > 0.003:
+                    if ema_separation > 0.0005:
                         score += 0.25
                         factors.append("EMA spread lebar")
-                    elif ema_separation > 0.0015:
+                    elif ema_separation > 0.0002:
                         score += 0.15
                         factors.append("EMA spread medium")
+                    elif ema_separation > 0.0001:
+                        score += 0.10
+                        factors.append("EMA spread minimal")
             
             if is_valid_number(macd_histogram_raw):
                 macd_histogram = safe_float(macd_histogram_raw, 0.0)
                 macd_strength = abs(macd_histogram)
                 if is_valid_number(macd_strength):
-                    if macd_strength > 0.5:
+                    if macd_strength > 0.05:
                         score += 0.25
                         factors.append("MACD histogram kuat")
-                    elif macd_strength > 0.2:
+                    elif macd_strength > 0.02:
                         score += 0.15
                         factors.append("MACD histogram medium")
+                    elif macd_strength > 0.01:
+                        score += 0.10
+                        factors.append("MACD histogram minimal")
             
             if is_valid_number(rsi_raw):
                 rsi = safe_float(rsi_raw, 50.0)
                 if 0 <= rsi <= 100:
                     rsi_momentum = safe_divide(abs(rsi - 50), 50, 0.0, "rsi_momentum")
                     if is_valid_number(rsi_momentum):
-                        if rsi_momentum > 0.4:
+                        if rsi_momentum > 0.1:
                             score += 0.25
                             factors.append("RSI momentum tinggi")
-                        elif rsi_momentum > 0.2:
+                        elif rsi_momentum > 0.05:
                             score += 0.15
                             factors.append("RSI momentum medium")
+                        elif rsi_momentum > 0.02:
+                            score += 0.10
+                            factors.append("RSI momentum minimal")
                 else:
                     logger.warning(f"RSI out of range in trend strength: {rsi}")
             
@@ -560,12 +569,15 @@ class TradingStrategy:
                 if volume_avg > 0:
                     volume_ratio = safe_divide(volume, volume_avg, 0.0, "volume_ratio")
                     if is_valid_number(volume_ratio):
-                        if volume_ratio > 1.5:
+                        if volume_ratio > 0.5:
                             score += 0.25
                             factors.append("Volume sangat tinggi")
-                        elif volume_ratio > 1.0:
+                        elif volume_ratio > 0.3:
                             score += 0.15
                             factors.append("Volume tinggi")
+                        elif volume_ratio > 0.1:
+                            score += 0.10
+                            factors.append("Volume minimal")
             
             if math.isnan(score) or math.isinf(score):
                 logger.warning(f"NaN/Inf detected in trend strength score, returning default")
@@ -1822,7 +1834,7 @@ class TradingStrategy:
                 
                 trend_strength = float(min(max(trend_strength, 0.0), 1.0))
                 
-                min_trend_strength = 0.20
+                min_trend_strength = 0.05
                 if signal_source == 'auto' and trend_strength < min_trend_strength:
                     logger.info(f"Auto signal rejected - trend strength too weak: {trend_strength:.2f} < {min_trend_strength} ({trend_desc})")
                     close_price = safe_float(close, 0.0)

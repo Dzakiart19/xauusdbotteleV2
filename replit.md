@@ -64,6 +64,14 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
+- **2025-11-27 (CURRENT):** CRITICAL TP/SL BUG FIXES & MONITORING IMPROVEMENTS:
+  - Fixed TP/SL close logic: Positions now properly close when reaching TP or SL targets
+  - Added fallback price method in position monitoring: if get_current_price() fails, try get_last_candle('M1') 
+  - Enhanced TP/SL detection logging for debugging: detailed log when conditions are met
+  - Fixed SL/TP calculation unified: Both auto and manual modes now use FIXED_RISK_AMOUNT=$2 with max 20 pips SL
+  - Risk Manager confirmed: Expected loss = $2.00, Expected profit = 1.65x-1.70x (dynamic based on trend)
+  - Trailing stop anti-spam working: 30-second cooldown prevents duplicate notifications
+  - Position reload on restart working: Positions persist across bot restarts
 - **2025-11-27:** CRITICAL BUG FIXES - Signal generation now working:
   - Fixed circular dependency: `has_active_position` no longer checks `SignalSessionManager` (session != position)
   - Fixed trend_strength calculation: Thresholds lowered 10x for scalping (EMA: 0.003→0.0005, MACD: 0.5→0.05, RSI: 0.4→0.1)

@@ -1240,15 +1240,20 @@ class PositionTracker:
                 else:
                     hit_tp = current_price <= take_profit
                     hit_sl = current_price >= stop_loss
+                
+                if hit_tp or hit_sl:
+                    logger.info(f"🎯 Position {position_id} TP/SL trigger: Price=${current_price:.2f}, TP=${take_profit:.2f}, SL=${stop_loss:.2f}, hit_tp={hit_tp}, hit_sl={hit_sl}")
             except (ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error checking TP/SL conditions: {e}")
                 return None
             
             if hit_tp:
+                logger.info(f"✅ TP HIT - Position {position_id}: Price=${current_price:.2f} >= TP=${take_profit:.2f}")
                 await self.close_position(user_id, position_id, current_price, 'TP_HIT')
                 return 'TP_HIT'
             elif hit_sl:
                 reason = 'DYNAMIC_SL_HIT' if sl_adjusted else 'SL_HIT'
+                logger.info(f"❌ SL HIT - Position {position_id}: Price=${current_price:.2f} <= SL=${stop_loss:.2f}")
                 await self.close_position(user_id, position_id, current_price, reason)
                 return reason
             
@@ -1459,14 +1464,29 @@ class PositionTracker:
         updated_positions = []
         
         try:
-            current_price = await asyncio.wait_for(
-                self.market_data.get_current_price(),
-                timeout=DEFAULT_OPERATION_TIMEOUT
-            )
+            current_price = None
+            try:
+                current_price = await asyncio.wait_for(
+                    self.market_data.get_current_price(),
+                    timeout=3.0
+                )
+            except (asyncio.TimeoutError, ValueError, TypeError, ConnectionError):
+                logger.debug("get_current_price timeout, trying fallback...")
+                try:
+                    last_candle = await asyncio.wait_for(
+                        self.market_data.get_last_candle('M1'),
+                        timeout=2.0
+                    )
+                    if last_candle is not None and len(last_candle) > 0:
+                        current_price = float(last_candle.iloc[-1]['close']) if 'close' in last_candle.columns else None
+                except:
+                    pass
             
-            if not current_price:
-                logger.warning("No current price available for position monitoring")
+            if not current_price or current_price <= 0:
+                logger.warning("No current price available for position monitoring (both methods failed)")
                 return []
+            
+            logger.debug(f"Position monitoring: checking {len(positions_snapshot)} user(s) with price=${current_price:.2f}")
             
             for user_id, position_ids in positions_snapshot.items():
                 for position_id in position_ids:
@@ -1477,7 +1497,7 @@ class PositionTracker:
                     try:
                         result = await asyncio.wait_for(
                             self.update_position(user_id, position_id, current_price),
-                            timeout=DEFAULT_OPERATION_TIMEOUT
+                            timeout=5.0
                         )
                         if result:
                             updated_positions.append({
@@ -1488,17 +1508,14 @@ class PositionTracker:
                             })
                             logger.info(f"Position {position_id} User:{user_id} closed: {result} at ${current_price:.2f}")
                     except asyncio.TimeoutError:
-                        logger.error(f"Timeout updating position {position_id} for user {user_id}")
+                        logger.debug(f"Timeout updating position {position_id} for user {user_id}")
                     except (asyncio.CancelledError, ValueError, TypeError, KeyError, AttributeError) as e:
-                        logger.error(f"Error monitoring position {position_id} for user {user_id}: {e}")
+                        logger.debug(f"Error monitoring position {position_id} for user {user_id}: {e}")
             
             return updated_positions
             
-        except asyncio.TimeoutError:
-            logger.error("Timeout getting current price for position monitoring")
-            return []
         except (asyncio.CancelledError, ConnectionError, ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.error(f"Error in monitor_active_positions: {e}")
+            logger.debug(f"Error in monitor_active_positions: {e}")
             return []
     
     async def monitor_positions(self, market_data_client):

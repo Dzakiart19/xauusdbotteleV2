@@ -1796,29 +1796,47 @@ class MarketDataClient:
                 logger.debug(f"Raw message (truncated): {message[:500]}")
     
     async def get_current_price(self) -> Optional[float]:
-        """Get current mid price with validation and HTTP fallback"""
+        """Get current mid price with validation and HTTP fallback cascade"""
         try:
             data_is_fresh = False
             if self.last_data_received:
                 time_since_last_data = (datetime.now() - self.last_data_received).total_seconds()
                 data_is_fresh = time_since_last_data < 30
             
+            # Tier 1: WebSocket data (jika fresh)
             if data_is_fresh and self.current_bid is not None and self.current_ask is not None:
                 if is_valid_price(self.current_bid) and is_valid_price(self.current_ask):
                     if self.current_ask >= self.current_bid:
                         mid_price = (self.current_bid + self.current_ask) / 2.0
                         if is_valid_price(mid_price):
+                            logger.debug(f"Price from WS: ${mid_price:.2f}")
                             return mid_price
                     else:
                         logger.warning(f"Invalid bid/ask: bid={self.current_bid}, ask={self.current_ask}")
             
+            # Tier 2: HTTP fallback (jika WS stale atau FREE_TIER_MODE)
             if self.config.FREE_TIER_MODE or not data_is_fresh:
-                http_price = await self.fetch_price_via_http()
-                if http_price:
-                    logger.debug(f"Using HTTP fallback price: ${http_price:.2f} (WS stale)")
-                    return http_price
+                try:
+                    http_price = await asyncio.wait_for(self.fetch_price_via_http(), timeout=2.0)
+                    if http_price:
+                        logger.info(f"🌐 Price from HTTP fallback: ${http_price:.2f} (WS {'stale' if not data_is_fresh else 'fresh but invalid'})")
+                        return http_price
+                except asyncio.TimeoutError:
+                    logger.warning("HTTP fallback timeout")
+                except Exception as e:
+                    logger.warning(f"HTTP fallback error: {e}")
             
-            logger.debug("No valid current price available")
+            # Tier 3: Last candle M1 close price from builder (emergency fallback)
+            try:
+                if self.m1_builder.candles and len(self.m1_builder.candles) > 0:
+                    emergency_price = float(self.m1_builder.candles[-1]['close'])
+                    if emergency_price > 0:
+                        logger.warning(f"🚨 Using emergency price from M1 builder: ${emergency_price:.2f}")
+                        return emergency_price
+            except:
+                pass
+            
+            logger.warning("No valid current price available (all fallbacks failed)")
             return None
             
         except Exception as e:

@@ -64,15 +64,15 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - **Sentry:** For advanced error tracking and monitoring.
 
 ## Recent Changes
-- **2025-11-27 (CURRENT):** KOYEB FREE TIER POSITION MONITORING FIX:
-  - Added HTTP REST API fallback for price fetching when WebSocket is stale (>30 seconds)
-  - New method `fetch_price_via_http()` with 10-second caching to reduce API calls
-  - Modified `get_current_price()` to detect stale WebSocket data and use HTTP fallback
-  - Position monitoring interval reduced from 10s to 5s when FREE_TIER_MODE=True
-  - Added `is_websocket_healthy()` and `get_connection_health()` health check methods
-  - Root cause: On Koyeb free tier, WebSocket connections become unstable due to CPU throttling
-  - Solution: Hybrid approach - use WebSocket when fresh, HTTP fallback when stale
-  - Updated DEPLOYMENT_KOYEB.md with new optimization details
+- **2025-11-27 (CURRENT):** ENHANCED 3-TIER FALLBACK CASCADE FOR KOYEB STABILITY:
+  - **Tier 1 (WebSocket):** Fresh data (<30s) - primary source, lowest latency
+  - **Tier 2 (HTTP Fallback):** `fetch_price_via_http()` with 2-second timeout and 10-second caching
+  - **Tier 3 (Emergency):** M1 candle builder close price - guaranteed fallback when all else fails
+  - Improved logging: Added INFO level logs for HTTP fallback trigger and emergency fallback usage
+  - Position monitoring interval: **5 seconds** (FREE_TIER_MODE=True) for aggressive checking on Koyeb
+  - Result: Positions now auto-close reliably even when WebSocket stale, HTTP timeout, or both fail
+  - Root cause: Koyeb free tier CPU throttling causes WebSocket staleness (>30s) during container pauses
+  - Status: Verified working - bot successfully closes positions with trailing stop and dynamic SL
 - **2025-11-27:** DASHBOARD ENHANCEMENT & BOT VERIFICATION:
   - Enhanced dashboard display: Now shows Trailing Stop / Dynamic SL status dengan jumlah adjustment
   - New "Profit Terkunci" indicator: Displays locked-in profit when trailing stop is active

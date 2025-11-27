@@ -1605,9 +1605,34 @@ class TradingBot:
         consecutive_timeouts = 0
         MAX_CONSECUTIVE_TIMEOUTS = 5
         
+        # Tracking untuk daily summary skip
+        daily_summary_skip_count = 0
+        last_daily_summary_log_time = datetime.now() - timedelta(seconds=60)
+        
         try:
             while self.monitoring and chat_id in self.monitoring_chats and not self._is_shutting_down:
                 try:
+                    # === CEK DAILY SUMMARY FLAG ===
+                    # Skip signal detection sementara saat daily summary sedang dikirim
+                    # untuk menghindari blocking/stuck pada monitoring loop
+                    if self.alert_system and self.alert_system.is_sending_daily_summary():
+                        daily_summary_skip_count += 1
+                        now_check = datetime.now()
+                        
+                        # Log setiap 10 detik untuk debugging, tidak spam log
+                        if (now_check - last_daily_summary_log_time).total_seconds() >= 10:
+                            logger.debug(f"📊 [MONITORING] Skip signal detection - daily summary sedang dikirim (skip count: {daily_summary_skip_count}) | User:{mask_user_id(chat_id)}")
+                            last_daily_summary_log_time = now_check
+                        
+                        # Short sleep dan continue, loop tetap berjalan
+                        await asyncio.sleep(0.5)
+                        continue
+                    
+                    # Reset counter jika daily summary selesai
+                    if daily_summary_skip_count > 0:
+                        logger.info(f"📊 [MONITORING] Daily summary selesai - signal detection resume (total skip: {daily_summary_skip_count}) | User:{mask_user_id(chat_id)}")
+                        daily_summary_skip_count = 0
+                    
                     tick = await asyncio.wait_for(tick_queue.get(), timeout=30.0)
                     consecutive_timeouts = 0
                     
@@ -1675,8 +1700,26 @@ class TradingBot:
                         indicator_engine = IndicatorEngine(self.config)
                         indicators = indicator_engine.get_indicators(df_m1)
                         
+                        # === FETCH M5 DATA UNTUK CONFIRMATION ===
+                        # M5 confirmation digunakan untuk memvalidasi trend dari timeframe lebih tinggi
+                        # Ini meningkatkan akurasi signal AUTO dengan memastikan alignment multi-timeframe
+                        m5_indicators = None
+                        try:
+                            df_m5 = await self.market_data.get_historical_data('M5', 50)
+                            if df_m5 is not None and len(df_m5) >= 20:
+                                m5_indicators = indicator_engine.get_indicators(df_m5)
+                                logger.debug(f"✅ M5 data loaded untuk confirmation ({len(df_m5)} candles)")
+                            else:
+                                logger.debug(f"⚠️ M5 data tidak cukup untuk confirmation ({len(df_m5) if df_m5 is not None else 0} candles) - AUTO signal tetap lanjut tanpa M5")
+                        except Exception as m5_error:
+                            logger.debug(f"⚠️ Error fetching M5 data: {m5_error} - AUTO signal tetap lanjut tanpa M5")
+                        
                         if indicators:
-                            signal = self.strategy.detect_signal(indicators, 'M1', signal_source='auto')
+                            signal = self.strategy.detect_signal(
+                                indicators, 'M1', 
+                                signal_source='auto',
+                                m5_indicators=m5_indicators
+                            )
                             
                             # Avoid duplicate signals - check if this is a new signal (different price or direction)
                             signal_direction = signal['signal'] if signal else None

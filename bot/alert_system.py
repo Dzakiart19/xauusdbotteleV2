@@ -119,6 +119,13 @@ class AlertSystem:
         self._critical_dropped = 0
         self._last_history_cleanup = time.time()
         
+        # Flag untuk tracking status daily summary
+        # Digunakan oleh TradingBot untuk skip signal detection saat daily summary sedang dikirim
+        self._is_sending_daily_summary: bool = False
+        self._daily_summary_lock = asyncio.Lock()
+        self._last_daily_summary_time: Optional[datetime] = None
+        self._daily_summary_error_count: int = 0
+        
         logger.info(f"Alert system initialized (max_queue={MAX_QUEUE_SIZE}, max_history={MAX_HISTORY_SIZE})")
     
     def set_telegram_app(self, app, chat_ids: List[int], send_message_callback=None):
@@ -430,16 +437,56 @@ class AlertSystem:
         
         await self.send_alert(alert)
     
+    def is_sending_daily_summary(self) -> bool:
+        """Cek apakah daily summary sedang dikirim.
+        
+        Digunakan oleh TradingBot._monitoring_loop() untuk skip signal detection
+        sementara saat daily summary sedang berlangsung.
+        
+        Returns:
+            bool: True jika sedang mengirim daily summary, False jika tidak
+        """
+        return self._is_sending_daily_summary
+    
+    def get_daily_summary_status(self) -> Dict[str, Any]:
+        """Mendapatkan status lengkap daily summary untuk debugging.
+        
+        Returns:
+            Dict berisi status, last_time, dan error_count
+        """
+        return {
+            'is_sending': self._is_sending_daily_summary,
+            'last_summary_time': self._last_daily_summary_time.isoformat() if self._last_daily_summary_time else None,
+            'error_count': self._daily_summary_error_count
+        }
+    
     async def send_daily_summary(self):
+        """Kirim ringkasan trading harian.
+        
+        Method ini menggunakan flag _is_sending_daily_summary untuk tracking,
+        sehingga TradingBot bisa skip signal detection sementara saat daily summary
+        sedang dikirim untuk menghindari blocking/stuck.
+        """
+        session = None
+        
+        # Set flag bahwa daily summary sedang dikirim
+        # Ini akan dibaca oleh TradingBot._monitoring_loop() untuk skip signal detection
+        async with self._daily_summary_lock:
+            self._is_sending_daily_summary = True
+            logger.info("📊 [DAILY_SUMMARY] Mulai mengirim daily summary - signal detection akan di-skip sementara")
+        
         try:
             session = self.db.get_session()
             if session is None:
-                logger.error("Failed to get database session for daily summary")
+                logger.error("📊 [DAILY_SUMMARY] Gagal mendapatkan database session")
+                self._daily_summary_error_count += 1
                 return
             
             jakarta_tz = pytz.timezone('Asia/Jakarta')
             today = datetime.now(jakarta_tz).replace(hour=0, minute=0, second=0, microsecond=0)
             today_utc = today.astimezone(pytz.UTC)
+            
+            logger.debug(f"📊 [DAILY_SUMMARY] Query trades sejak {today_utc}")
             
             today_trades = session.query(Trade).filter(
                 Trade.signal_time >= today_utc
@@ -463,7 +510,7 @@ class AlertSystem:
                 f"Total P/L: ${total_pl:.2f}"
             )
             
-            session.close()
+            logger.debug(f"📊 [DAILY_SUMMARY] Summary message siap: {total_trades} trades, {wins}W/{losses}L")
             
             alert = Alert(
                 alert_type=AlertType.DAILY_SUMMARY,
@@ -474,8 +521,27 @@ class AlertSystem:
             
             await self.send_alert(alert)
             
+            # Update tracking setelah berhasil
+            self._last_daily_summary_time = datetime.now(pytz.UTC)
+            logger.info(f"📊 [DAILY_SUMMARY] Berhasil dikirim - {total_trades} sinyal, {wins}W/{losses}L, P/L: ${total_pl:.2f}")
+            
         except (AlertSystemError, Exception) as e:
-            logger.error(f"Error sending daily summary: {e}")
+            self._daily_summary_error_count += 1
+            logger.error(f"📊 [DAILY_SUMMARY] Error mengirim daily summary: {e}")
+        
+        finally:
+            # PENTING: Pastikan session database selalu di-close
+            if session is not None:
+                try:
+                    session.close()
+                    logger.debug("📊 [DAILY_SUMMARY] Database session ditutup dengan benar")
+                except Exception as close_error:
+                    logger.warning(f"📊 [DAILY_SUMMARY] Warning saat close session: {close_error}")
+            
+            # PENTING: Reset flag meskipun ada error - ini mencegah bot stuck
+            async with self._daily_summary_lock:
+                self._is_sending_daily_summary = False
+                logger.info("📊 [DAILY_SUMMARY] Selesai - signal detection akan resume normal")
     
     async def send_risk_warning(self, warning_type: str, details: str):
         message = (
@@ -573,7 +639,13 @@ class AlertSystem:
             'total_dropped': self._total_dropped,
             'current_backoff': self._current_backoff,
             'rate_limiter': self.rate_limiter.get_state(),
-            'circuit_breaker': self.circuit_breaker.get_state()
+            'circuit_breaker': self.circuit_breaker.get_state(),
+            # Informasi daily summary untuk debugging
+            'daily_summary': {
+                'is_sending': self._is_sending_daily_summary,
+                'last_summary_time': self._last_daily_summary_time.isoformat() if self._last_daily_summary_time else None,
+                'error_count': self._daily_summary_error_count
+            }
         }
     
     def save_queue_state(self, filepath: Optional[str] = None) -> bool:

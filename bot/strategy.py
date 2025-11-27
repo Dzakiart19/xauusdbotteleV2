@@ -978,6 +978,123 @@ class TradingStrategy:
             logger.error(f"Error in check_adx_filter: {e}")
             return True, f"✅ ADX Filter SKIPPED: Error - {str(e)}", 0.0
     
+    def check_m5_confirmation(self, m5_indicators: Optional[Dict], signal_type: str) -> Tuple[bool, str]:
+        """Memeriksa konfirmasi trend dari timeframe M5 untuk meningkatkan akurasi signal AUTO.
+        
+        M5 Confirmation memeriksa trend alignment di higher timeframe (M5) untuk memastikan
+        signal M1 searah dengan trend M5. Ini mengurangi false signals dengan memastikan
+        multi-timeframe alignment.
+        
+        Kriteria M5 Confirmation:
+        1. EMA Alignment di M5 (EMA5 vs EMA20) searah dengan signal
+        2. RSI M5 mendukung arah signal (> 50 untuk BUY, < 50 untuk SELL)
+        3. MACD M5 direction konfirmasi trend (bullish/bearish)
+        
+        Minimal 2 dari 3 kriteria harus terpenuhi untuk PASS.
+        
+        Args:
+            m5_indicators: Dictionary indicator dari timeframe M5 (bisa None)
+            signal_type: 'BUY' atau 'SELL' dari M1
+            
+        Returns:
+            Tuple[bool, str]: (passed, reason)
+            - Jika m5_indicators None/kosong, return (True, skip message) - tidak blocking
+        """
+        try:
+            if not m5_indicators or not isinstance(m5_indicators, dict):
+                reason = "✅ M5 Confirmation: Data M5 tidak tersedia - lanjut dengan M1 saja"
+                logger.debug(reason)
+                return True, reason
+            
+            if signal_type not in ['BUY', 'SELL']:
+                reason = f"❌ M5 Confirmation: Invalid signal_type: {signal_type}"
+                logger.warning(reason)
+                return False, reason
+            
+            confirmations_passed = 0
+            confirmations_needed = 2
+            confirmation_details = []
+            
+            ema_5_m5 = m5_indicators.get(f'ema_{self.config.EMA_PERIODS[0]}')
+            ema_20_m5 = m5_indicators.get(f'ema_{self.config.EMA_PERIODS[1]}')
+            close_m5 = m5_indicators.get('close')
+            
+            if is_valid_number(ema_5_m5) and is_valid_number(ema_20_m5) and is_valid_number(close_m5):
+                ema5 = safe_float(ema_5_m5, 0.0)
+                ema20 = safe_float(ema_20_m5, 0.0)
+                close = safe_float(close_m5, 0.0)
+                
+                if signal_type == 'BUY':
+                    if ema5 > ema20 and close > ema20:
+                        confirmations_passed += 1
+                        confirmation_details.append(f"EMA M5 bullish (EMA5>{ema5:.2f} > EMA20>{ema20:.2f})")
+                    else:
+                        confirmation_details.append(f"EMA M5 tidak bullish (EMA5={ema5:.2f}, EMA20={ema20:.2f})")
+                elif signal_type == 'SELL':
+                    if ema5 < ema20 and close < ema20:
+                        confirmations_passed += 1
+                        confirmation_details.append(f"EMA M5 bearish (EMA5={ema5:.2f} < EMA20={ema20:.2f})")
+                    else:
+                        confirmation_details.append(f"EMA M5 tidak bearish (EMA5={ema5:.2f}, EMA20={ema20:.2f})")
+            else:
+                confirmation_details.append("EMA M5: data tidak tersedia")
+            
+            rsi_m5 = m5_indicators.get('rsi')
+            
+            if is_valid_number(rsi_m5):
+                rsi = safe_float(rsi_m5, 50.0)
+                
+                if signal_type == 'BUY':
+                    if rsi > 45:
+                        confirmations_passed += 1
+                        confirmation_details.append(f"RSI M5 bullish ({rsi:.1f} > 45)")
+                    else:
+                        confirmation_details.append(f"RSI M5 bearish ({rsi:.1f} <= 45)")
+                elif signal_type == 'SELL':
+                    if rsi < 55:
+                        confirmations_passed += 1
+                        confirmation_details.append(f"RSI M5 bearish ({rsi:.1f} < 55)")
+                    else:
+                        confirmation_details.append(f"RSI M5 bullish ({rsi:.1f} >= 55)")
+            else:
+                confirmation_details.append("RSI M5: data tidak tersedia")
+            
+            macd_m5 = m5_indicators.get('macd')
+            macd_signal_m5 = m5_indicators.get('macd_signal')
+            macd_histogram_m5 = m5_indicators.get('macd_histogram')
+            
+            if is_valid_number(macd_m5) and is_valid_number(macd_signal_m5):
+                macd = safe_float(macd_m5, 0.0)
+                macd_sig = safe_float(macd_signal_m5, 0.0)
+                
+                if signal_type == 'BUY':
+                    if macd > macd_sig or (is_valid_number(macd_histogram_m5) and safe_float(macd_histogram_m5, 0.0) > 0):
+                        confirmations_passed += 1
+                        confirmation_details.append(f"MACD M5 bullish")
+                    else:
+                        confirmation_details.append(f"MACD M5 tidak bullish")
+                elif signal_type == 'SELL':
+                    if macd < macd_sig or (is_valid_number(macd_histogram_m5) and safe_float(macd_histogram_m5, 0.0) < 0):
+                        confirmations_passed += 1
+                        confirmation_details.append(f"MACD M5 bearish")
+                    else:
+                        confirmation_details.append(f"MACD M5 tidak bearish")
+            else:
+                confirmation_details.append("MACD M5: data tidak tersedia")
+            
+            if confirmations_passed >= confirmations_needed:
+                reason = f"✅ M5 Confirmation PASSED: {confirmations_passed}/{confirmations_needed} kriteria ({', '.join(confirmation_details)})"
+                logger.info(reason)
+                return True, reason
+            else:
+                reason = f"❌ M5 Confirmation FAILED: Hanya {confirmations_passed}/{confirmations_needed} kriteria pass ({', '.join(confirmation_details)})"
+                logger.info(reason)
+                return False, reason
+                
+        except (StrategyError, Exception) as e:
+            logger.error(f"Error in check_m5_confirmation: {e}")
+            return True, f"✅ M5 Confirmation: Error - {str(e)} (lanjut dengan M1)"
+    
     def check_rsi_level_filter(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
         """Check RSI level filter - SCALPING MODE: Non-blocking, hanya info
         
@@ -1358,12 +1475,12 @@ class TradingStrategy:
             logger.debug(f"Error in get_volatility_adjustment: {e}")
             return 1.0
     
-    def get_multi_confirmation_score(self, indicators: Dict, current_spread: float = 0.0) -> Dict:
+    def get_multi_confirmation_score(self, indicators: Dict, current_spread: float = 0.0, signal_source: str = 'auto') -> Dict:
         """Get comprehensive multi-confirmation analysis - WEIGHTED SCORING VERSION + OPTIMIZATION FILTERS
         
         PERBAIKAN dengan WEIGHTED SCORING + OPTIMIZATION FILTERS:
-        - Trend Filter: 25% weight (MUST PASS - mandatory)
-        - ADX Filter: 10% weight (kekuatan tren - OPTIMASI)
+        - Trend Filter: 25% weight (MUST PASS - mandatory untuk semua)
+        - ADX Filter: 10% weight (BLOCKING untuk AUTO, informational untuk MANUAL)
         - Momentum Filter: 15% weight
         - RSI Level Filter: 5% weight (anti-jenuh - OPTIMASI)
         - EMA Slope Filter: 5% weight (arah EMA - OPTIMASI)
@@ -1373,14 +1490,15 @@ class TradingStrategy:
         - Spread Filter: 10% weight
         
         Threshold: 
-        - AUTO signal: ≥ 60% combined score + Trend MUST PASS + ADX PASS
-        - MANUAL signal: ≥ 40% combined score
+        - AUTO signal: ≥ 60% combined score + Trend MUST PASS + ADX MUST PASS (BLOCKING)
+        - MANUAL signal: ≥ 40% combined score + Trend MUST PASS (ADX non-blocking)
         
         Dynamic adjustment based on ATR/volatility applied.
         
         Args:
             indicators: Dictionary of calculated indicators
             current_spread: Current spread in price units
+            signal_source: Sumber signal ('auto' atau 'manual')
             
         Returns:
             Dict with all filter results and total score
@@ -1498,18 +1616,29 @@ class TradingStrategy:
             
             auto_threshold = 30.0
             
-            core_filters_passed = trend_passed
-            supporting_filters = momentum_passed or volume_passed or pa_passed or adx_passed or rsi_level_passed
-            score_threshold_met = adjusted_score >= auto_threshold
-            
-            result['all_mandatory_passed'] = core_filters_passed and (supporting_filters or score_threshold_met)
+            if signal_source == 'auto':
+                core_filters_passed = trend_passed and adx_passed
+                supporting_filters = momentum_passed or volume_passed or pa_passed or rsi_level_passed
+                score_threshold_met = adjusted_score >= auto_threshold
+                
+                result['all_mandatory_passed'] = core_filters_passed and (supporting_filters or score_threshold_met)
+                
+                if not adx_passed:
+                    logger.info(f"🚫 AUTO Signal BLOCKED: ADX filter tidak pass - ADX({adx_value:.1f}) < threshold")
+            else:
+                core_filters_passed = trend_passed
+                supporting_filters = momentum_passed or volume_passed or pa_passed or adx_passed or rsi_level_passed
+                score_threshold_met = adjusted_score >= auto_threshold
+                
+                result['all_mandatory_passed'] = core_filters_passed and (supporting_filters or score_threshold_met)
             
             volatility_info = ""
             if volatility_adj != 1.0:
                 volatility_info = f" | Volatility Adj: {volatility_adj:.2f}x"
             
-            adx_info = f" | ADX: {adx_value:.1f}" if adx_value > 0 else ""
-            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 (Weighted: {adjusted_score:.0f}%){adx_info}{volatility_info} | Signal Ready: {result['all_mandatory_passed']}")
+            adx_blocking_info = " [ADX BLOCKING]" if signal_source == 'auto' else " [ADX info only]"
+            adx_info = f" | ADX: {adx_value:.1f}{adx_blocking_info}" if adx_value > 0 else ""
+            logger.info(f"Multi-Confirmation Score: {result['total_score']}/100 (Weighted: {adjusted_score:.0f}%){adx_info}{volatility_info} | Signal Ready: {result['all_mandatory_passed']} | Source: {signal_source}")
             
             return result
             
@@ -1604,25 +1733,29 @@ class TradingStrategy:
             logger.error(f"Error in calculate_sl_tp: {e}")
             return None, None, None, None
         
-    def detect_signal(self, indicators: Dict, timeframe: str = 'M1', signal_source: str = 'auto', current_spread: float = 0.0, candle_timestamp: Optional[datetime] = None) -> Optional[Dict]:  # pyright: ignore[reportGeneralTypeIssues]
+    def detect_signal(self, indicators: Dict, timeframe: str = 'M1', signal_source: str = 'auto', current_spread: float = 0.0, candle_timestamp: Optional[datetime] = None, m5_indicators: Optional[Dict] = None) -> Optional[Dict]:  # pyright: ignore[reportGeneralTypeIssues]
         """Detect trading signal with multi-confirmation strategy
         
-        Uses professional multi-confirmation approach with 6 MANDATORY filters:
+        Uses professional multi-confirmation approach with 7 MANDATORY filters untuk AUTO:
         1. Trend Filter (MANDATORY): EMA5 > EMA20 > EMA50 alignment + price position
         2. Momentum Filter (MANDATORY): RSI in entry range + direction + Stochastic confirmation
         3. Volume/VWAP Filter (MANDATORY): Volume above average + VWAP position
         4. Price Action Filter (MANDATORY): Candlestick patterns + S/R proximity
         5. Session Filter (MANDATORY): London-NY overlap
         6. Spread Filter (MANDATORY): Spread < MAX_SPREAD_PIPS
+        7. ADX Filter (MANDATORY untuk AUTO): ADX >= 15 (BLOCKING)
+        8. M5 Confirmation (MANDATORY untuk AUTO): Trend alignment dengan M5 timeframe
         
-        ALL 6 filters MUST pass for signal to be generated.
+        Untuk AUTO signals: Semua 8 filter HARUS pass.
+        Untuk MANUAL signals: ADX dan M5 confirmation opsional (informational only).
         
         Args:
-            indicators: Dictionary of calculated indicators
+            indicators: Dictionary of calculated indicators dari M1
             timeframe: Timeframe string (e.g., 'M1', 'M5')
             signal_source: Source of signal ('auto' atau 'manual')
             current_spread: Current spread in price units
             candle_timestamp: Timestamp candle untuk tracking (opsional)
+            m5_indicators: Dictionary of calculated indicators dari M5 (opsional untuk M5 confirmation)
         
         Note: This function is intentionally complex due to multi-indicator trading logic.
         Pyright complexity warning is suppressed as it does not affect runtime behavior.
@@ -1675,7 +1808,7 @@ class TradingStrategy:
                 logger.warning(f"Missing required indicators for signal detection: {missing}")
                 return None
             
-            mc_result = self.get_multi_confirmation_score(indicators, current_spread)
+            mc_result = self.get_multi_confirmation_score(indicators, current_spread, signal_source)
             
             signal = None
             confidence_reasons = mc_result.get('confidence_reasons', [])
@@ -1687,7 +1820,17 @@ class TradingStrategy:
             
             if signal_source == 'auto':
                 if mc_result['all_mandatory_passed']:
-                    signal = mc_result['signal_type']
+                    potential_signal = mc_result['signal_type']
+                    
+                    m5_passed, m5_reason = self.check_m5_confirmation(m5_indicators, potential_signal)
+                    confidence_reasons.append(m5_reason)
+                    
+                    if not m5_passed:
+                        logger.info(f"🚫 AUTO Signal BLOCKED: M5 confirmation failed - {m5_reason}")
+                        logger.info(f"📊 Signal {potential_signal} ditolak karena M5 tidak konfirmasi trend M1")
+                        return None
+                    
+                    signal = potential_signal
                     close_price = safe_float(close, 0.0)
                     
                     candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', True)
@@ -1802,6 +1945,11 @@ class TradingStrategy:
                     logger.info(f"✅ MANUAL SIGNAL APPROVED - Weighted Score: {adjusted_score:.0f}% (threshold: {manual_threshold}%)")
                     confidence_reasons = mc_result.get('confidence_reasons', [])
                     confidence_reasons.append(f"Manual Mode Weighted Score: {adjusted_score:.0f}%")
+                    
+                    m5_passed, m5_reason = self.check_m5_confirmation(m5_indicators, signal)
+                    confidence_reasons.append(f"ℹ️ M5 Info (non-blocking): {m5_reason}")
+                    if not m5_passed:
+                        logger.info(f"⚠️ MANUAL Signal: M5 tidak konfirmasi - {m5_reason} (tetap generate karena MANUAL mode)")
                     
                     if trf_trend is not None:
                         if signal == 'BUY' and trf_trend == 1:

@@ -541,6 +541,7 @@ class Config:
     
     DATABASE_URL = os.getenv('DATABASE_URL', '')
     DATABASE_PATH = os.getenv('DATABASE_PATH', 'data/bot.db')
+    RESET_HISTORICAL_DATA_ON_START = os.getenv('RESET_HISTORICAL_DATA_ON_START', 'false').lower() == 'true'
     
     DRY_RUN = os.getenv('DRY_RUN', 'false').lower() == 'true'
     

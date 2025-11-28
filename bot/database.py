@@ -1624,6 +1624,67 @@ class DatabaseManager:
             result['issues'].append(f"Error database: {e}")
             return result
     
+    def clear_historical_data(self) -> Dict[str, Any]:
+        """Hapus semua data history trading untuk fresh start di Koyeb deployment
+        
+        Returns:
+            dict: Statistik data yang dihapus
+        """
+        result = {
+            'trades_deleted': 0,
+            'positions_deleted': 0,
+            'signal_logs_deleted': 0,
+            'performance_deleted': 0,
+            'success': False,
+            'message': ''
+        }
+        
+        if not self.Session:
+            result['message'] = 'Session not initialized'
+            return result
+        
+        session = None
+        try:
+            session = self.Session()
+            
+            # Hapus semua trades
+            trades_deleted = session.query(Trade).delete()
+            result['trades_deleted'] = trades_deleted
+            logger.info(f"🗑️  Dihapus {trades_deleted} trade records")
+            
+            # Hapus semua positions
+            positions_deleted = session.query(Position).delete()
+            result['positions_deleted'] = positions_deleted
+            logger.info(f"🗑️  Dihapus {positions_deleted} position records")
+            
+            # Hapus semua signal logs
+            signal_logs_deleted = session.query(SignalLog).delete()
+            result['signal_logs_deleted'] = signal_logs_deleted
+            logger.info(f"🗑️  Dihapus {signal_logs_deleted} signal log records")
+            
+            # Hapus semua performance records
+            performance_deleted = session.query(Performance).delete()
+            result['performance_deleted'] = performance_deleted
+            logger.info(f"🗑️  Dihapus {performance_deleted} performance records")
+            
+            session.commit()
+            result['success'] = True
+            result['message'] = f'✅ History data cleared: {trades_deleted} trades, {positions_deleted} positions, {signal_logs_deleted} signal logs, {performance_deleted} performance records'
+            logger.info(f"✅ Historical data cleared successfully: {result['message']}")
+            
+            return result
+            
+        except (OperationalError, SQLAlchemyError, Exception) as e:
+            if session:
+                session.rollback()
+            logger.error(f"❌ Error saat menghapus historical data: {type(e).__name__}: {e}")
+            result['success'] = False
+            result['message'] = f'Error: {str(e)}'
+            return result
+        finally:
+            if session:
+                session.close()
+    
     def close(self):
         """Menutup koneksi database dengan error handling dan pool cleanup."""
         try:

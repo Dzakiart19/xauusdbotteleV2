@@ -1,7 +1,7 @@
 # XAUUSD Trading Bot Pro V2
 
 ## Overview
-This project is an automated XAUUSD trading bot accessible via Telegram. It provides real-time trading signals, automatic position tracking, and trade outcome notifications. The bot offers 24/7 unlimited signals, robust risk management, and a database for performance tracking. It is a private bot with access control, features advanced chart generation with technical indicators, and employs a refined dual-mode strategy (Auto/Manual signals). This strategy incorporates advanced filtering with Twin Range Filter (TRF) and Market Bias CEREBR, along with a Trend-Plus-Pullback approach for enhanced precision and opportunity, aiming to be a professional and informative trading assistant for XAUUSD.
+This project is an automated Telegram-based trading bot for XAUUSD, designed to provide real-time signals, automatic position tracking, and trade outcome notifications. It offers 24/7 unlimited signals, robust risk management, and performance tracking via a database. Key features include advanced chart generation with technical indicators, a refined dual-mode (Auto/Manual) trading strategy utilizing advanced filtering with Twin Range Filter (TRF) and Market Bias CEREBR, and a Trend-Plus-Pullback approach for enhanced precision. The bot aims to be a professional, informative, and accessible trading assistant for XAUUSD, with a focus on private access control.
 
 ## User Preferences
 - Bahasa komunikasi: **Bahasa Indonesia** (100% tidak ada bahasa Inggris)
@@ -15,21 +15,21 @@ This project is an automated XAUUSD trading bot accessible via Telegram. It prov
 - Akses Bot: **Privat** - hanya untuk user yang terdaftar di AUTHORIZED_USER_IDS atau ID_USER_PUBLIC
 
 ## System Architecture
-The bot's architecture is modular, designed for scalability and maintainability.
+The bot features a modular architecture for scalability and maintainability.
 
-**Core Components:**
-- **Orchestrator:** Manages bot components.
+**Core Components & System Design:**
+- **Orchestrator:** Manages bot operations.
 - **Market Data:** Handles Deriv WebSocket connection, OHLC candle construction, and persistence.
-- **Strategy:** Implements a dual-mode signal detection (Auto/Manual) using multiple indicators (Twin Range Filter, Market Bias CEREBR, EMA 50, RSI) with a weighted scoring system for signal generation. Auto mode requires a minimum weighted score and trend strength.
+- **Strategy:** Implements dual-mode signal detection (Auto/Manual) using indicators like Twin Range Filter, Market Bias CEREBR, EMA 50, and RSI, with a weighted scoring system.
 - **Position Tracker:** Monitors real-time trade positions per user.
 - **Telegram Bot:** Manages command handling and notifications.
 - **Chart Generator:** Creates professional charts with integrated technical indicators.
-- **Risk Manager:** Calculates lot sizes, P/L, and enforces per-user risk limits (e.g., fixed SL, dynamic TP, signal cooldown).
-- **Database:** SQLite for persistent data with PostgreSQL support, auto-migration, connection pooling, and robust transaction management.
-- **User Manager:** Handles user authentication and access control via `AUTHORIZED_USER_IDS` and `ID_USER_PUBLIC`.
-- **Resilience:** Implements CircuitBreaker for WebSocket, global rate limiting for Telegram API, retry mechanisms, and advanced WebSocket recovery with exponential backoff.
-- **System Health:** Includes port conflict detection, bot instance locking (file-based flock), Sentry integration, comprehensive health checks, and OOM graceful degradation.
-- **Thread Safety:** Implements asyncio.Lock for position tracking, signal session management, and atomic command execution to prevent race conditions.
+- **Risk Manager:** Calculates lot sizes, P/L, and enforces per-user risk limits (fixed SL, dynamic TP, signal cooldown).
+- **Database:** SQLite (with PostgreSQL support) for persistent data, featuring auto-migration, connection pooling, and robust transaction management.
+- **User Manager:** Handles user authentication and access control.
+- **Resilience:** Incorporates CircuitBreaker for WebSocket, global rate limiting for Telegram API, retry mechanisms, and advanced WebSocket recovery.
+- **System Health:** Includes port conflict detection, bot instance locking, Sentry integration, health checks, and OOM graceful degradation.
+- **Thread Safety:** Utilizes `asyncio.Lock` for position tracking, signal session management, and atomic command execution.
 
 **UI/UX Decisions:**
 - Telegram serves as the primary user interface.
@@ -39,115 +39,27 @@ The bot's architecture is modular, designed for scalability and maintainability.
 - All timestamps are displayed in WIB (Asia/Jakarta) timezone.
 
 **Technical Implementations & Feature Specifications:**
-- **Indicators:** EMA (5, 10, 20, 50), RSI (14), Stochastic (K=14, D=3), ATR (14), MACD (12,26,9), Volume, Twin Range Filter, Market Bias CEREBR. Includes robust data handling.
-- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Features dynamic SL tightening and trailing stop activation. Unlimited mode disables signal cooldowns and daily loss limits. Lot size is fixed at 0.01.
+- **Indicators:** EMA (5, 10, 20, 50), RSI (14), Stochastic (K=14, D=3), ATR (14), MACD (12,26,9), Volume, Twin Range Filter, Market Bias CEREBR.
+- **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation. Lot size is fixed at 0.01.
 - **Access Control:** Private bot with dual-tier access.
 - **Commands:** Admin commands (`/riset`, `/status`, `/tasks`, `/analytics`, `/systemhealth`) and User commands (`/start`, `/help`, `/monitor`, `/getsignal`, `/status`, `/riwayat`, `/performa`).
-- **Anti-Duplicate Protection:** Employs a two-phase cache pattern (pending/confirmed status, hash-based tracking, thread-safe locking, TTL-backed signal cache with async cleanup) for race-condition-safe signal deduplication and chart cleanup. Incorporates anti-spam features like minimum price movement and cooldowns per signal type, generating signals only on M1 candle close.
-- **Candle Data Persistence:** Stores M1 and M5 candles in the database for instant bot readiness on restart.
-- **Chart Generation:** Uses `mplfinance` and `matplotlib` for multi-panel charts, configured for headless operation, with configurable timeouts and aggressive cleanup.
+- **Anti-Duplicate Protection:** Employs a two-phase cache pattern (pending/confirmed status, hash-based tracking, thread-safe locking, TTL-backed signal cache with async cleanup) for race-condition-safe signal deduplication and anti-spam.
+- **Candle Data Persistence:** Stores M1 and M5 candles in the database.
+- **Chart Generation:** Uses `mplfinance` and `matplotlib` for multi-panel charts, configured for headless operation.
 - **Multi-User Support:** Implements per-user position tracking and risk management.
 - **Deployment:** Optimized for Koyeb and Replit, featuring an HTTP server for health checks and webhooks, and `FREE_TIER_MODE` for resource efficiency.
 - **Performance Optimization:** Unlimited mode features no global signal cooldown, no tick throttling, early exit for position monitoring, optimized Telegram timeout handling, and fast text-only exit notifications.
 - **Logging & Error Handling:** Rate-limited logging, log rotation, type-safe indicator computations, and comprehensive exception handling.
-- **Task Management:** Centralized task registry with shielded cancellation for graceful shutdown, background task callbacks, and stale task detection.
+- **Task Management:** Centralized task registry with shielded cancellation for graceful shutdown and background task callbacks.
 
 ## External Dependencies
 - **Deriv WebSocket API:** For real-time XAUUSD market data.
 - **Telegram Bot API (`python-telegram-bot`):** For all Telegram interactions.
-- **SQLAlchemy:** ORM for database interactions (SQLite, PostgreSQL).
+- **SQLAlchemy:** ORM for database interactions.
 - **Pandas & NumPy:** For data manipulation and numerical operations.
 - **mplfinance & Matplotlib:** For generating financial charts.
 - **pytz:** For timezone handling.
 - **aiohttp:** For asynchronous HTTP server and client operations.
 - **python-dotenv:** For managing environment variables.
 - **Sentry:** For advanced error tracking and monitoring.
-
-## Recent Changes
-- **2025-11-27 (CURRENT):** SIGNAL ACCURACY ENHANCEMENT & BOT STABILITY:
-  - **Daily Summary Fix (Bot Stuck Prevention):**
-    - Added `_is_sending_daily_summary` flag di AlertSystem untuk tracking
-    - Added `_daily_summary_lock` untuk thread-safety
-    - Updated `send_daily_summary()` dengan try/finally pattern - flag SELALU reset
-    - Updated `_monitoring_loop()` untuk skip signal detection saat daily summary, dengan counter dan recovery logging
-  - **M5 Confirmation untuk AUTO signals (Multi-Timeframe Analysis):**
-    - New method `check_m5_confirmation()` di strategy.py (baris 981-1096)
-    - Memeriksa EMA alignment, RSI direction, dan MACD direction di M5
-    - Minimal 2 dari 3 kriteria harus pass untuk AUTO signals
-    - Untuk MANUAL signals: M5 confirmation informational only (non-blocking)
-    - M5 data di-fetch di `_monitoring_loop()` dan di-pass ke `detect_signal()`
-  - **ADX Filter BLOCKING untuk AUTO signals:**
-    - Untuk AUTO: `core_filters_passed = trend_passed AND adx_passed` (BLOCKING)
-    - Untuk MANUAL: `core_filters_passed = trend_passed` saja (ADX non-blocking)
-    - ADX threshold: >= 15 untuk pass
-  - **Flow Signal AUTO sekarang:** M1 signal → ADX blocking → M5 confirmation blocking → generate signal
-  - **Backward Compatibility:** Jika M5 data tidak tersedia, AUTO signal tetap lanjut tanpa M5
-- **2025-11-27:** KOYEB DEPLOYMENT OPTIMIZATION:
-  - **requirements.txt cleanup:** Removed all duplicate packages (35→17 entries) for cleaner builds
-  - **Dockerfile enhanced for chart rendering:**
-    - Added fonts: `fonts-dejavu-core`, `fonts-liberation`, `fontconfig` 
-    - Added font cache refresh: `fc-cache -fv`
-    - Added explicit `MPLBACKEND=Agg` environment variable
-    - Added `FONTCONFIG_PATH=/etc/fonts` for font discovery
-  - **Problem solved:** Charts now render clearly in Koyeb without font warnings
-  - **Port configuration:** Uses `PORT` env var (Koyeb sets this automatically), defaults to 8080
-- **2025-11-27:** ENHANCED 3-TIER FALLBACK CASCADE FOR KOYEB STABILITY:
-  - **Tier 1 (WebSocket):** Fresh data (<30s) - primary source, lowest latency
-  - **Tier 2 (HTTP Fallback):** `fetch_price_via_http()` with 2-second timeout and 10-second caching
-  - **Tier 3 (Emergency):** M1 candle builder close price - guaranteed fallback when all else fails
-  - Improved logging: Added INFO level logs for HTTP fallback trigger and emergency fallback usage
-  - Position monitoring interval: **5 seconds** (FREE_TIER_MODE=True) for aggressive checking on Koyeb
-  - Result: Positions now auto-close reliably even when WebSocket stale, HTTP timeout, or both fail
-  - Root cause: Koyeb free tier CPU throttling causes WebSocket staleness (>30s) during container pauses
-  - Status: Verified working - bot successfully closes positions with trailing stop and dynamic SL
-- **2025-11-27:** DASHBOARD ENHANCEMENT & BOT VERIFICATION:
-  - Enhanced dashboard display: Now shows Trailing Stop / Dynamic SL status dengan jumlah adjustment
-  - New "Profit Terkunci" indicator: Displays locked-in profit when trailing stop is active
-  - Verified bot functionality: 5 positions created and closed successfully
-  - Bot NOT stuck: New signals created within 35-45 seconds after position closes (waiting for M1 candle close)
-  - Trailing stop working: Successfully moved SL to lock in profits (+$1.19, +$0.68)
-  - Tested scenarios: TP approach (100% progress), trailing stop activation, dynamic SL protection
-- **2025-11-27:** SESSION LIFECYCLE & SIGNAL BLOCKING FIX:
-  - Fixed critical bug: `close_position` now calls `signal_session_manager.end_session()` to allow new signals after position close
-  - Fixed monitoring loop: Optimized to recheck positions every 0.5s when blocked (not wait for global_cooldown)
-  - Fixed reentrant logging: Signal handler in main.py uses `loop.call_soon_threadsafe()` for thread-safe logging
-  - Fixed race condition: `stop_dashboard` uses `pop()` instead of `del` to avoid KeyError
-  - Fixed stale session update: Removed `update_session` call after `end_session` to prevent warning
-  - Verified working: Position closes → Session ends → Cache cleared → New signals ready immediately
-- **2025-11-27:** CRITICAL TP/SL BUG FIXES & MONITORING IMPROVEMENTS:
-  - Fixed TP/SL close logic: Positions now properly close when reaching TP or SL targets
-  - Added fallback price method in position monitoring: if get_current_price() fails, try get_last_candle('M1') 
-  - Enhanced TP/SL detection logging for debugging: detailed log when conditions are met
-  - Fixed SL/TP calculation unified: Both auto and manual modes now use FIXED_RISK_AMOUNT=$2 with max 20 pips SL
-  - Risk Manager confirmed: Expected loss = $2.00, Expected profit = 1.65x-1.70x (dynamic based on trend)
-  - Trailing stop anti-spam working: 30-second cooldown prevents duplicate notifications
-  - Position reload on restart working: Positions persist across bot restarts
-- **2025-11-27:** CRITICAL BUG FIXES - Signal generation now working:
-  - Fixed circular dependency: `has_active_position` no longer checks `SignalSessionManager` (session != position)
-  - Fixed trend_strength calculation: Thresholds lowered 10x for scalping (EMA: 0.003→0.0005, MACD: 0.5→0.05, RSI: 0.4→0.1)
-  - Fixed min_trend_strength: Lowered from 0.20 to 0.05 for AUTO signals
-  - Removed duplicate session check in `_send_signal` that caused blocking
-  - Added `.gitignore` file for proper version control
-- **2025-11-27:** SCALPING MODE AGGRESSIVE - Major relaxation of signal filters:
-  - Threshold score AUTO diturunkan dari 60% ke 30%
-  - Threshold score MANUAL diturunkan dari 40% ke 20%
-  - ADX Filter DISABLED - Tidak lagi memblokir market sideways/ranging
-  - Session Filter DISABLED - Trading 24/7 diizinkan semua sesi
-  - EMA Slope Filter DISABLED - Tidak lagi memblokir sinyal
-  - RSI Level Filter DISABLED - Tidak lagi memblokir di overbought/oversold
-  - Volume threshold diturunkan dari 80% ke 30%
-  - RSI entry range diperluas dari [25-75] ke [15-85]
-  - Stochastic levels diperluas dari [15-85] ke [10-90]
-  - SIGNAL_MINIMUM_PRICE_MOVEMENT diturunkan dari 0.50 ke 0.05
-  - TICK_COOLDOWN_FOR_SAME_SIGNAL diset ke 0 untuk unlimited sinyal
-  - Max spread ditingkatkan dari 20 ke 50 pips
-  - Logika mandatory filters diubah dari AND ke OR untuk lebih banyak sinyal
-  - Semua filter sekarang informational only, tidak blocking
-- **2025-11-27:** Added 5 optimization filters to reduce false signals in sideways markets:
-  - ADX Filter: Minimum trend strength (ADX >= 20) to skip ranging markets
-  - RSI Level Filter: Prevents BUY at overbought (>70) and SELL at oversold (<30)
-  - Pin Bar Stricter: Increased tail requirement from 60% to 66.67% (2/3)
-  - EMA Slope Filter: Ensures EMA is actively trending, not flat
-  - Session Filter: Targets London+NY sessions (14:00-23:00 WIB / 07:00-16:00 UTC)
-- **2025-11-27:** Updated config.py with new parameters: ADX_PERIOD, ADX_THRESHOLD, RSI_BUY_MAX_LEVEL, RSI_SELL_MIN_LEVEL, EMA_SLOPE_FILTER_ENABLED, SESSION_FILTER_STRICT, etc.
-- **2025-11-27:** Fixed undefined `ErrorHandlingError` exception class in `bot/error_handler.py` - removed 5 references to non-existent exception class that was causing LSP errors.
+```

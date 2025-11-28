@@ -182,6 +182,12 @@ class TradingBotOrchestrator:
         )
         logger.info("Database initialized")
         
+        # Reset historical data jika RESET_HISTORICAL_DATA_ON_START=true (untuk Koyeb deployment)
+        if self.config.RESET_HISTORICAL_DATA_ON_START:
+            logger.info("🔄 RESET_HISTORICAL_DATA_ON_START aktif - menghapus data history...")
+            clear_result = self.db_manager.clear_historical_data()
+            logger.info(f"Reset result: {clear_result['message']}")
+        
         self.backup_manager = DatabaseBackupManager(
             db_path=self.config.DATABASE_PATH,
             backup_dir='backups',

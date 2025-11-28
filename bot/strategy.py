@@ -2267,3 +2267,658 @@ class TradingStrategy:
         except (StrategyError, Exception) as e:
             logger.error(f"Signal validation error: {type(e).__name__}: {e}")
             return False, f"Validation error: {str(e)}"
+
+
+@dataclass
+class ConfluenceResult:
+    """Result of confluence scoring calculation for trading signals.
+    
+    Attributes:
+        total_score: Overall confluence score from 0-100
+        confluences_met: List of confluence confirmations that passed
+        confidence_level: Signal quality level ('SCALP', 'SHORT_TERM', 'OPTIMAL')
+        recommended_tp_pips: Recommended take profit in pips
+        recommended_sl_pips: Recommended stop loss in pips
+        confluence_count: Number of confluences met
+        weights_used: Dictionary of weights applied per confluence
+        market_regime: Market regime used for weighting
+        signal_type: Signal type ('BUY' or 'SELL')
+    """
+    total_score: int = 0
+    confluences_met: List[str] = field(default_factory=list)
+    confidence_level: str = 'NONE'
+    recommended_tp_pips: float = 0.0
+    recommended_sl_pips: float = 0.0
+    confluence_count: int = 0
+    weights_used: Dict[str, float] = field(default_factory=dict)
+    market_regime: str = 'unknown'
+    signal_type: str = ''
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert ConfluenceResult to dictionary for JSON serialization"""
+        return {
+            'total_score': self.total_score,
+            'confluences_met': self.confluences_met,
+            'confidence_level': self.confidence_level,
+            'recommended_tp_pips': self.recommended_tp_pips,
+            'recommended_sl_pips': self.recommended_sl_pips,
+            'confluence_count': self.confluence_count,
+            'weights_used': self.weights_used,
+            'market_regime': self.market_regime,
+            'signal_type': self.signal_type
+        }
+
+
+class ConfluenceScorer:
+    """Confluence Scoring System untuk bot trading XAUUSD.
+    
+    Sistem ini menghitung confluence score berdasarkan multiple confirmations:
+    1. Trend Confirmation (EMA alignment + price position)
+    2. Momentum Confirmation (RSI direction atau MACD histogram)
+    3. Volume Confirmation (volume spike > 1.2x average)
+    4. Price Action Confirmation (break S/R + retest)
+    5. Bollinger Band Confirmation (break upper/lower band)
+    6. Stochastic Confirmation (K line cross D line)
+    
+    Scoring System:
+    - 2 confluence = 60% confidence (SCALP signal, 15-30 pip target)
+    - 3 confluence = 80% confidence (SHORT-TERM signal, 30-50 pip target)
+    - 4+ confluence = 95% confidence (OPTIMAL signal, 50+ pip target)
+    
+    Adaptive Weighting berdasarkan market regime:
+    - Trending market: EMA/MACD weight lebih tinggi
+    - Ranging market: S/R/Stochastic weight lebih tinggi
+    """
+    
+    CONFLUENCE_TREND = 'trend_confirmation'
+    CONFLUENCE_MOMENTUM = 'momentum_confirmation'
+    CONFLUENCE_VOLUME = 'volume_confirmation'
+    CONFLUENCE_PRICE_ACTION = 'price_action_confirmation'
+    CONFLUENCE_BOLLINGER = 'bollinger_confirmation'
+    CONFLUENCE_STOCHASTIC = 'stochastic_confirmation'
+    
+    DEFAULT_WEIGHTS: Dict[str, float] = {
+        CONFLUENCE_TREND: 20.0,
+        CONFLUENCE_MOMENTUM: 18.0,
+        CONFLUENCE_VOLUME: 15.0,
+        CONFLUENCE_PRICE_ACTION: 17.0,
+        CONFLUENCE_BOLLINGER: 15.0,
+        CONFLUENCE_STOCHASTIC: 15.0
+    }
+    
+    TRENDING_WEIGHTS: Dict[str, float] = {
+        CONFLUENCE_TREND: 25.0,
+        CONFLUENCE_MOMENTUM: 22.0,
+        CONFLUENCE_VOLUME: 12.0,
+        CONFLUENCE_PRICE_ACTION: 15.0,
+        CONFLUENCE_BOLLINGER: 13.0,
+        CONFLUENCE_STOCHASTIC: 13.0
+    }
+    
+    RANGING_WEIGHTS: Dict[str, float] = {
+        CONFLUENCE_TREND: 12.0,
+        CONFLUENCE_MOMENTUM: 15.0,
+        CONFLUENCE_VOLUME: 15.0,
+        CONFLUENCE_PRICE_ACTION: 22.0,
+        CONFLUENCE_BOLLINGER: 16.0,
+        CONFLUENCE_STOCHASTIC: 20.0
+    }
+    
+    VOLUME_SPIKE_THRESHOLD = 1.2
+    
+    RSI_BULLISH_THRESHOLD = 50
+    RSI_BEARISH_THRESHOLD = 50
+    
+    STOCH_OVERBOUGHT = 80
+    STOCH_OVERSOLD = 20
+    
+    def __init__(self, config):
+        """Initialize ConfluenceScorer with configuration.
+        
+        Args:
+            config: Configuration object with trading parameters
+        """
+        self.config = config
+        self._logger = logger
+    
+    def _get_weights(self, market_regime: str) -> Dict[str, float]:
+        """Get confluence weights based on market regime.
+        
+        Args:
+            market_regime: Current market regime type
+            
+        Returns:
+            Dictionary of weights per confluence type
+        """
+        regime_lower = market_regime.lower() if market_regime else 'unknown'
+        
+        if regime_lower in ['strong_trend', 'moderate_trend', 'breakout']:
+            return self.TRENDING_WEIGHTS.copy()
+        elif regime_lower in ['range_bound', 'weak_trend']:
+            return self.RANGING_WEIGHTS.copy()
+        else:
+            return self.DEFAULT_WEIGHTS.copy()
+    
+    def _check_trend_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check trend confirmation via EMA alignment and price position.
+        
+        Kriteria:
+        - EMA alignment (short > mid > long untuk BUY, sebaliknya untuk SELL)
+        - Price above/below key moving average
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            ema_periods = getattr(self.config, 'EMA_PERIODS', [5, 20, 50])
+            
+            ema_short_key = f'ema_{ema_periods[0]}'
+            ema_mid_key = f'ema_{ema_periods[1]}'
+            ema_long_key = f'ema_{ema_periods[2]}' if len(ema_periods) > 2 else f'ema_{ema_periods[1]}'
+            
+            ema_short = indicators.get(ema_short_key)
+            ema_mid = indicators.get(ema_mid_key)
+            ema_long = indicators.get(ema_long_key)
+            close = indicators.get('close')
+            
+            if not all([is_valid_number(ema_short), is_valid_number(ema_mid), 
+                       is_valid_number(ema_long), is_valid_number(close)]):
+                return False, "EMA/Close data tidak tersedia"
+            
+            ema_s = safe_float(ema_short, 0.0)
+            ema_m = safe_float(ema_mid, 0.0)
+            ema_l = safe_float(ema_long, 0.0)
+            close_val = safe_float(close, 0.0)
+            
+            if ema_s <= 0 or ema_m <= 0 or ema_l <= 0 or close_val <= 0:
+                return False, "EMA/Close values tidak valid"
+            
+            if signal_type == 'BUY':
+                ema_aligned = ema_s > ema_m > ema_l
+                price_above_ma = close_val > ema_m
+                
+                if ema_aligned and price_above_ma:
+                    return True, f"Trend BULLISH: EMA aligned (EMA{ema_periods[0]}>{ema_periods[1]}>{ema_periods[2]}) + Price > EMA{ema_periods[1]}"
+                elif ema_aligned:
+                    return True, f"Trend BULLISH: EMA aligned (partial confirmation)"
+                elif price_above_ma and ema_s > ema_m:
+                    return True, f"Trend BULLISH: Price > EMA{ema_periods[1]} + Short EMA bullish"
+                    
+            elif signal_type == 'SELL':
+                ema_aligned = ema_s < ema_m < ema_l
+                price_below_ma = close_val < ema_m
+                
+                if ema_aligned and price_below_ma:
+                    return True, f"Trend BEARISH: EMA aligned (EMA{ema_periods[0]}<{ema_periods[1]}<{ema_periods[2]}) + Price < EMA{ema_periods[1]}"
+                elif ema_aligned:
+                    return True, f"Trend BEARISH: EMA aligned (partial confirmation)"
+                elif price_below_ma and ema_s < ema_m:
+                    return True, f"Trend BEARISH: Price < EMA{ema_periods[1]} + Short EMA bearish"
+            
+            return False, "Trend tidak terkonfirmasi"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in trend confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _check_momentum_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check momentum confirmation via RSI direction or MACD histogram.
+        
+        Kriteria:
+        - RSI > 50 untuk BUY, RSI < 50 untuk SELL
+        - MACD histogram positif untuk BUY, negatif untuk SELL
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            rsi = indicators.get('rsi')
+            rsi_prev = indicators.get('rsi_prev')
+            macd_histogram = indicators.get('macd_histogram')
+            macd = indicators.get('macd')
+            macd_signal = indicators.get('macd_signal')
+            
+            confirmations = []
+            
+            if is_valid_number(rsi):
+                rsi_val = safe_float(rsi, 50.0)
+                rsi_direction = ""
+                
+                if is_valid_number(rsi_prev):
+                    rsi_prev_val = safe_float(rsi_prev, 50.0)
+                    if rsi_val > rsi_prev_val:
+                        rsi_direction = "↗"
+                    elif rsi_val < rsi_prev_val:
+                        rsi_direction = "↘"
+                
+                if signal_type == 'BUY':
+                    if rsi_val > self.RSI_BULLISH_THRESHOLD:
+                        confirmations.append(f"RSI bullish ({rsi_val:.1f}{rsi_direction} > 50)")
+                elif signal_type == 'SELL':
+                    if rsi_val < self.RSI_BEARISH_THRESHOLD:
+                        confirmations.append(f"RSI bearish ({rsi_val:.1f}{rsi_direction} < 50)")
+            
+            if is_valid_number(macd_histogram):
+                histogram = safe_float(macd_histogram, 0.0)
+                
+                if signal_type == 'BUY' and histogram > 0:
+                    confirmations.append(f"MACD histogram positif ({histogram:.4f})")
+                elif signal_type == 'SELL' and histogram < 0:
+                    confirmations.append(f"MACD histogram negatif ({histogram:.4f})")
+            
+            if is_valid_number(macd) and is_valid_number(macd_signal):
+                macd_val = safe_float(macd, 0.0)
+                signal_val = safe_float(macd_signal, 0.0)
+                
+                if signal_type == 'BUY' and macd_val > signal_val:
+                    confirmations.append(f"MACD > Signal line")
+                elif signal_type == 'SELL' and macd_val < signal_val:
+                    confirmations.append(f"MACD < Signal line")
+            
+            if confirmations:
+                return True, f"Momentum: {' + '.join(confirmations)}"
+            
+            return False, "Momentum tidak terkonfirmasi"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in momentum confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _check_volume_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check volume confirmation via volume spike detection.
+        
+        Kriteria:
+        - Volume > 1.2x average volume (VOLUME_SPIKE_THRESHOLD)
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            volume = indicators.get('volume')
+            volume_avg = indicators.get('volume_avg')
+            
+            if not is_valid_number(volume) or not is_valid_number(volume_avg):
+                return False, "Volume data tidak tersedia"
+            
+            vol = safe_float(volume, 0.0)
+            vol_avg = safe_float(volume_avg, 0.0)
+            
+            if vol_avg <= 0:
+                return False, "Volume average tidak valid"
+            
+            volume_ratio = safe_divide(vol, vol_avg, 1.0, "volume_ratio")
+            
+            if volume_ratio >= self.VOLUME_SPIKE_THRESHOLD:
+                return True, f"Volume spike: {volume_ratio:.2f}x average (>{self.VOLUME_SPIKE_THRESHOLD}x)"
+            
+            return False, f"Volume normal ({volume_ratio:.2f}x)"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in volume confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _check_price_action_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check price action confirmation via S/R break and retest.
+        
+        Kriteria:
+        - Price near support level untuk BUY
+        - Price near resistance level untuk SELL
+        - Candlestick pattern confirmation
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            close = indicators.get('close')
+            atr = indicators.get('atr')
+            sr_levels = indicators.get('support_resistance', {})
+            patterns = indicators.get('candlestick_patterns', {})
+            
+            if not is_valid_number(close):
+                return False, "Close price tidak tersedia"
+            
+            close_val = safe_float(close, 0.0)
+            atr_val = safe_float(atr, 1.0) if is_valid_number(atr) else 1.0
+            
+            confirmations = []
+            
+            if patterns and isinstance(patterns, dict):
+                if signal_type == 'BUY':
+                    if patterns.get('bullish_engulfing') or patterns.get('hammer') or patterns.get('bullish_pinbar'):
+                        pattern_names = []
+                        if patterns.get('bullish_engulfing'):
+                            pattern_names.append('Bullish Engulfing')
+                        if patterns.get('hammer'):
+                            pattern_names.append('Hammer')
+                        if patterns.get('bullish_pinbar'):
+                            pattern_names.append('Bullish Pinbar')
+                        confirmations.append(f"Pattern: {', '.join(pattern_names)}")
+                elif signal_type == 'SELL':
+                    if patterns.get('bearish_engulfing') or patterns.get('inverted_hammer') or patterns.get('bearish_pinbar'):
+                        pattern_names = []
+                        if patterns.get('bearish_engulfing'):
+                            pattern_names.append('Bearish Engulfing')
+                        if patterns.get('inverted_hammer'):
+                            pattern_names.append('Inverted Hammer')
+                        if patterns.get('bearish_pinbar'):
+                            pattern_names.append('Bearish Pinbar')
+                        confirmations.append(f"Pattern: {', '.join(pattern_names)}")
+            
+            if sr_levels and isinstance(sr_levels, dict):
+                nearest_support = sr_levels.get('nearest_support', 0.0)
+                nearest_resistance = sr_levels.get('nearest_resistance', 0.0)
+                
+                proximity_threshold = atr_val * 1.5
+                
+                if signal_type == 'BUY' and nearest_support > 0:
+                    distance_to_support = abs(close_val - nearest_support)
+                    if distance_to_support <= proximity_threshold:
+                        confirmations.append(f"Near Support ({nearest_support:.2f})")
+                        
+                elif signal_type == 'SELL' and nearest_resistance > 0:
+                    distance_to_resistance = abs(close_val - nearest_resistance)
+                    if distance_to_resistance <= proximity_threshold:
+                        confirmations.append(f"Near Resistance ({nearest_resistance:.2f})")
+            
+            if confirmations:
+                return True, f"Price Action: {' + '.join(confirmations)}"
+            
+            return False, "Price action tidak terkonfirmasi"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in price action confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _check_bollinger_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check Bollinger Band confirmation.
+        
+        Kriteria:
+        - Price break lower band untuk BUY (oversold condition)
+        - Price break upper band untuk SELL (overbought condition)
+        - Price reverting to middle band setelah break
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            close = indicators.get('close')
+            bb_upper = indicators.get('bb_upper')
+            bb_middle = indicators.get('bb_middle')
+            bb_lower = indicators.get('bb_lower')
+            
+            if not all([is_valid_number(close), is_valid_number(bb_upper), 
+                       is_valid_number(bb_middle), is_valid_number(bb_lower)]):
+                return False, "Bollinger Band data tidak tersedia"
+            
+            close_val = safe_float(close, 0.0)
+            upper = safe_float(bb_upper, 0.0)
+            middle = safe_float(bb_middle, 0.0)
+            lower = safe_float(bb_lower, 0.0)
+            
+            if upper <= 0 or middle <= 0 or lower <= 0:
+                return False, "Bollinger Band values tidak valid"
+            
+            bb_width = upper - lower
+            if bb_width <= 0:
+                return False, "Bollinger Band width tidak valid"
+            
+            band_threshold = bb_width * 0.1
+            
+            if signal_type == 'BUY':
+                if close_val <= lower + band_threshold:
+                    return True, f"BB Oversold: Price ({close_val:.2f}) near lower band ({lower:.2f})"
+                elif close_val > lower and close_val < middle:
+                    bb_prev_close = indicators.get('close_prev')
+                    if is_valid_number(bb_prev_close):
+                        prev = safe_float(bb_prev_close, 0.0)
+                        if prev <= lower:
+                            return True, f"BB Bounce: Price bouncing from lower band"
+                            
+            elif signal_type == 'SELL':
+                if close_val >= upper - band_threshold:
+                    return True, f"BB Overbought: Price ({close_val:.2f}) near upper band ({upper:.2f})"
+                elif close_val < upper and close_val > middle:
+                    bb_prev_close = indicators.get('close_prev')
+                    if is_valid_number(bb_prev_close):
+                        prev = safe_float(bb_prev_close, 0.0)
+                        if prev >= upper:
+                            return True, f"BB Reversal: Price reversing from upper band"
+            
+            return False, "Bollinger Band tidak terkonfirmasi"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in Bollinger Band confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _check_stochastic_confirmation(self, indicators: Dict, signal_type: str) -> Tuple[bool, str]:
+        """Check Stochastic confirmation via K/D line crossover.
+        
+        Kriteria:
+        - K line cross above D line untuk BUY (bullish crossover)
+        - K line cross below D line untuk SELL (bearish crossover)
+        - Oversold/overbought zone confirmation
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            
+        Returns:
+            Tuple of (is_confirmed, description)
+        """
+        try:
+            stoch_k = indicators.get('stoch_k')
+            stoch_d = indicators.get('stoch_d')
+            stoch_k_prev = indicators.get('stoch_k_prev')
+            stoch_d_prev = indicators.get('stoch_d_prev')
+            
+            if not all([is_valid_number(stoch_k), is_valid_number(stoch_d)]):
+                return False, "Stochastic data tidak tersedia"
+            
+            k = safe_float(stoch_k, 50.0)
+            d = safe_float(stoch_d, 50.0)
+            
+            if k < 0 or k > 100 or d < 0 or d > 100:
+                return False, "Stochastic values out of range"
+            
+            k_prev = safe_float(stoch_k_prev, k) if is_valid_number(stoch_k_prev) else k
+            d_prev = safe_float(stoch_d_prev, d) if is_valid_number(stoch_d_prev) else d
+            
+            if signal_type == 'BUY':
+                bullish_cross = k > d and k_prev <= d_prev
+                in_oversold = k < self.STOCH_OVERSOLD or k_prev < self.STOCH_OVERSOLD
+                k_rising = k > k_prev
+                
+                if bullish_cross and in_oversold:
+                    return True, f"Stoch Bullish Cross in Oversold: K({k:.1f}) crossed above D({d:.1f})"
+                elif bullish_cross:
+                    return True, f"Stoch Bullish Cross: K({k:.1f}) crossed above D({d:.1f})"
+                elif in_oversold and k_rising and k > d:
+                    return True, f"Stoch Oversold Recovery: K({k:.1f}) > D({d:.1f}) in oversold zone"
+                    
+            elif signal_type == 'SELL':
+                bearish_cross = k < d and k_prev >= d_prev
+                in_overbought = k > self.STOCH_OVERBOUGHT or k_prev > self.STOCH_OVERBOUGHT
+                k_falling = k < k_prev
+                
+                if bearish_cross and in_overbought:
+                    return True, f"Stoch Bearish Cross in Overbought: K({k:.1f}) crossed below D({d:.1f})"
+                elif bearish_cross:
+                    return True, f"Stoch Bearish Cross: K({k:.1f}) crossed below D({d:.1f})"
+                elif in_overbought and k_falling and k < d:
+                    return True, f"Stoch Overbought Reversal: K({k:.1f}) < D({d:.1f}) in overbought zone"
+            
+            return False, "Stochastic tidak terkonfirmasi"
+            
+        except Exception as e:
+            self._logger.warning(f"Error in Stochastic confirmation check: {e}")
+            return False, f"Error: {str(e)}"
+    
+    def _determine_confidence_level(self, confluence_count: int, total_score: float) -> Tuple[str, float, float]:
+        """Determine confidence level based on confluence count.
+        
+        Scoring System:
+        - 2 confluence = 60% confidence (SCALP signal, 15-30 pip target)
+        - 3 confluence = 80% confidence (SHORT-TERM signal, 30-50 pip target)
+        - 4+ confluence = 95% confidence (OPTIMAL signal, 50+ pip target)
+        
+        Args:
+            confluence_count: Number of confluences met
+            total_score: Total weighted score
+            
+        Returns:
+            Tuple of (confidence_level, recommended_tp_pips, recommended_sl_pips)
+        """
+        if confluence_count >= 4:
+            return 'OPTIMAL', 50.0, 25.0
+        elif confluence_count == 3:
+            return 'SHORT_TERM', 40.0, 20.0
+        elif confluence_count == 2:
+            return 'SCALP', 22.0, 15.0
+        elif confluence_count == 1:
+            return 'WEAK', 15.0, 12.0
+        else:
+            return 'NONE', 0.0, 0.0
+    
+    def calculate_confluence_score(self, indicators: Dict, signal_type: str, 
+                                   market_regime: str = 'unknown') -> ConfluenceResult:
+        """Calculate confluence score for a trading signal.
+        
+        This method evaluates all confluence factors and returns a comprehensive
+        scoring result with adaptive weighting based on market regime.
+        
+        Args:
+            indicators: Dictionary of calculated indicators
+            signal_type: 'BUY' or 'SELL'
+            market_regime: Current market regime type (e.g., 'strong_trend', 'range_bound')
+            
+        Returns:
+            ConfluenceResult dataclass with scoring details
+        """
+        result = ConfluenceResult(
+            market_regime=market_regime,
+            signal_type=signal_type
+        )
+        
+        try:
+            if not indicators or not isinstance(indicators, dict):
+                self._logger.warning("calculate_confluence_score: Invalid indicators dict")
+                return result
+            
+            if signal_type not in ['BUY', 'SELL']:
+                self._logger.warning(f"calculate_confluence_score: Invalid signal_type: {signal_type}")
+                return result
+            
+            weights = self._get_weights(market_regime)
+            result.weights_used = weights.copy()
+            
+            confluence_checks = [
+                (self.CONFLUENCE_TREND, self._check_trend_confirmation),
+                (self.CONFLUENCE_MOMENTUM, self._check_momentum_confirmation),
+                (self.CONFLUENCE_VOLUME, self._check_volume_confirmation),
+                (self.CONFLUENCE_PRICE_ACTION, self._check_price_action_confirmation),
+                (self.CONFLUENCE_BOLLINGER, self._check_bollinger_confirmation),
+                (self.CONFLUENCE_STOCHASTIC, self._check_stochastic_confirmation),
+            ]
+            
+            total_score: float = 0.0
+            confluences_met: List[str] = []
+            
+            for confluence_type, check_func in confluence_checks:
+                try:
+                    is_confirmed, description = check_func(indicators, signal_type)
+                    
+                    if is_confirmed:
+                        weight = weights.get(confluence_type, 15)
+                        total_score += weight
+                        confluences_met.append(f"{confluence_type}: {description}")
+                        self._logger.debug(f"Confluence MET: {confluence_type} (+{weight}) - {description}")
+                    else:
+                        self._logger.debug(f"Confluence NOT MET: {confluence_type} - {description}")
+                        
+                except Exception as e:
+                    self._logger.warning(f"Error checking {confluence_type}: {e}")
+            
+            confluence_count = len(confluences_met)
+            confidence_level, tp_pips, sl_pips = self._determine_confidence_level(confluence_count, total_score)
+            
+            result.total_score = int(min(100.0, total_score))
+            result.confluences_met = confluences_met
+            result.confluence_count = confluence_count
+            result.confidence_level = confidence_level
+            result.recommended_tp_pips = tp_pips
+            result.recommended_sl_pips = sl_pips
+            
+            self._logger.info(
+                f"Confluence Score: {result.total_score}/100 | "
+                f"Confluences: {confluence_count}/6 | "
+                f"Level: {confidence_level} | "
+                f"Regime: {market_regime} | "
+                f"Signal: {signal_type}"
+            )
+            
+            if confluences_met:
+                self._logger.info(f"Confluences met: {', '.join([c.split(':')[0] for c in confluences_met])}")
+            
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Error in calculate_confluence_score: {e}")
+            return result
+    
+    def get_signal_recommendation(self, result: ConfluenceResult) -> Dict[str, Any]:
+        """Get trading recommendation based on confluence result.
+        
+        Args:
+            result: ConfluenceResult from calculate_confluence_score
+            
+        Returns:
+            Dictionary with recommendation details
+        """
+        if result.confluence_count < 2:
+            action = 'SKIP'
+            reason = f"Insufficient confluence ({result.confluence_count}/6, need minimum 2)"
+        elif result.confidence_level == 'SCALP':
+            action = 'SCALP_ENTRY'
+            reason = f"Scalp opportunity: {result.confluence_count} confluences, 60% confidence"
+        elif result.confidence_level == 'SHORT_TERM':
+            action = 'ENTRY'
+            reason = f"Good entry: {result.confluence_count} confluences, 80% confidence"
+        elif result.confidence_level == 'OPTIMAL':
+            action = 'STRONG_ENTRY'
+            reason = f"Optimal entry: {result.confluence_count} confluences, 95% confidence"
+        else:
+            action = 'SKIP'
+            reason = f"Weak signal ({result.confluence_count}/6 confluences)"
+        
+        return {
+            'action': action,
+            'reason': reason,
+            'signal_type': result.signal_type,
+            'confidence_level': result.confidence_level,
+            'score': result.total_score,
+            'confluence_count': result.confluence_count,
+            'recommended_tp_pips': result.recommended_tp_pips,
+            'recommended_sl_pips': result.recommended_sl_pips,
+            'confluences': result.confluences_met,
+            'market_regime': result.market_regime
+        }

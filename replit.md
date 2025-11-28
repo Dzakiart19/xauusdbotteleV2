@@ -31,6 +31,14 @@ The bot features a modular architecture for scalability and maintainability.
 - **System Health:** Includes port conflict detection, bot instance locking, Sentry integration, health checks, and OOM graceful degradation.
 - **Thread Safety:** Utilizes `asyncio.Lock` for position tracking, signal session management, and atomic command execution.
 
+**Aggressive Scalping System (NEW):**
+- **Market Regime Detector:** ADX-based trend detection, ATR volatility analysis, S/R proximity, breakout detection. Returns regime type (strong_trend, moderate_trend, range_bound, breakout, high_volatility) dengan bias (BUY/SELL/NEUTRAL).
+- **Confluence Scoring System:** 2-3-4+ confluence levels dengan adaptive weighting per market regime. SCALP (2 conf, 15-30 pips), SHORT_TERM (3 conf, 30-50 pips), OPTIMAL (4+ conf, 50+ pips).
+- **4 Signal Rules:** M1_SCALP (20-50 signals/day), M5_SWING (5-15/day), SR_REVERSION (3-8/day, ranging), BREAKOUT (2-5/day).
+- **Dynamic Risk Calculator:** Daily exposure threshold, max concurrent positions (3-5), partial exit strategy (40%-35%-25%), trailing stop.
+- **Signal Quality Tracker:** Real-time statistics per rule/regime/hour, hit rate tracking, alert system untuk penurunan performa.
+- **Auto-Optimization Engine:** Dynamic adjustment rules, gradual parameter updates, safety guards, rollback mechanism.
+
 **UI/UX Decisions:**
 - Telegram serves as the primary user interface.
 - Signal messages are enriched with icons, source labels, and confidence reasons.
@@ -42,7 +50,7 @@ The bot features a modular architecture for scalability and maintainability.
 - **Indicators:** EMA (5, 10, 20, 50), RSI (14), Stochastic (K=14, D=3), ATR (14), MACD (12,26,9), Volume, Twin Range Filter, Market Bias CEREBR.
 - **Risk Management:** Fixed SL ($1 per trade), dynamic TP (1.45x-2.50x R:R), max spread (5 pips), risk per trade (0.5%). Includes dynamic SL tightening and trailing stop activation. Lot size is fixed at 0.01.
 - **Access Control:** Private bot with dual-tier access.
-- **Commands:** Admin commands (`/riset`, `/status`, `/tasks`, `/analytics`, `/systemhealth`) and User commands (`/start`, `/help`, `/monitor`, `/getsignal`, `/status`, `/riwayat`, `/performa`).
+- **Commands:** Admin commands (`/riset`, `/status`, `/tasks`, `/analytics`, `/systemhealth`) and User commands (`/start`, `/help`, `/monitor`, `/getsignal`, `/status`, `/riwayat`, `/performa`, `/regime`, `/optimize`, `/rules`).
 - **Anti-Duplicate Protection:** Employs a two-phase cache pattern (pending/confirmed status, hash-based tracking, thread-safe locking, TTL-backed signal cache with async cleanup) for race-condition-safe signal deduplication and anti-spam.
 - **Candle Data Persistence:** Stores M1 and M5 candles in the database.
 - **Chart Generation:** Uses `mplfinance` and `matplotlib` for multi-panel charts, configured for headless operation.

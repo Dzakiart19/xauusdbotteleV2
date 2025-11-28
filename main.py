@@ -29,6 +29,11 @@ from bot.error_handler import ErrorHandler
 from bot.user_manager import UserManager
 from bot.task_scheduler import TaskScheduler, setup_default_tasks
 from bot.signal_session_manager import SignalSessionManager
+from bot.market_regime import MarketRegimeDetector
+from bot.signal_rules import AggressiveSignalRules
+from bot.signal_quality_tracker import SignalQualityTracker
+from bot.auto_optimizer import AutoOptimizer
+from bot.indicators import IndicatorEngine
 
 logger = setup_logger('Main')
 
@@ -206,6 +211,11 @@ class TradingBotOrchestrator:
             self.user_manager = None
             self.market_data = None
             self.strategy = None
+            self.indicator_engine = None
+            self.signal_quality_tracker = None
+            self.market_regime_detector = None
+            self.signal_rules = None
+            self.auto_optimizer = None
             self.risk_manager = None
             self.chart_generator = None
             self.alert_system = None
@@ -227,6 +237,24 @@ class TradingBotOrchestrator:
         
         self.strategy = TradingStrategy(self.config)
         logger.info("Trading strategy initialized")
+        
+        self.indicator_engine = IndicatorEngine(self.config)
+        logger.info("Indicator engine initialized")
+        
+        self.signal_quality_tracker = SignalQualityTracker(self.db_manager, self.config)
+        logger.info("Signal quality tracker initialized")
+        
+        self.market_regime_detector = MarketRegimeDetector(self.config, self.indicator_engine)
+        logger.info("Market regime detector initialized")
+        
+        self.signal_rules = AggressiveSignalRules(self.config, self.indicator_engine)
+        logger.info("Aggressive signal rules initialized")
+        
+        self.auto_optimizer = AutoOptimizer(
+            signal_quality_tracker=self.signal_quality_tracker,
+            config=self.config
+        )
+        logger.info("Auto optimizer initialized")
         
         self.risk_manager = RiskManager(self.config, self.db_manager)
         logger.info("Risk manager initialized")
@@ -264,7 +292,11 @@ class TradingBotOrchestrator:
             self.error_handler,
             self.user_manager,
             self.signal_session_manager,
-            self.task_scheduler
+            self.task_scheduler,
+            market_regime_detector=self.market_regime_detector,
+            signal_rules=self.signal_rules,
+            signal_quality_tracker=self.signal_quality_tracker,
+            auto_optimizer=self.auto_optimizer
         )
         logger.info("Telegram bot initialized")
         

@@ -20,6 +20,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from bot.signal_session_manager import SignalSessionManager
 from bot.message_templates import MessageFormatter
 from bot.resilience import RateLimiter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot.market_regime import MarketRegimeDetector
+    from bot.signal_rules import AggressiveSignalRules
+    from bot.signal_quality_tracker import SignalQualityTracker
+    from bot.auto_optimizer import AutoOptimizer
 
 logger = setup_logger('TelegramBot')
 
@@ -279,7 +286,11 @@ class TradingBot:
     
     def __init__(self, config, db_manager, strategy, risk_manager, 
                  market_data, position_tracker, chart_generator,
-                 alert_system=None, error_handler=None, user_manager=None, signal_session_manager=None, task_scheduler=None):
+                 alert_system=None, error_handler=None, user_manager=None, signal_session_manager=None, task_scheduler=None,
+                 market_regime_detector: Optional['MarketRegimeDetector'] = None,
+                 signal_rules: Optional['AggressiveSignalRules'] = None,
+                 signal_quality_tracker: Optional['SignalQualityTracker'] = None,
+                 auto_optimizer: Optional['AutoOptimizer'] = None):
         self.config = config
         self.db = db_manager
         self.strategy = strategy
@@ -292,6 +303,10 @@ class TradingBot:
         self.user_manager = user_manager
         self.signal_session_manager = signal_session_manager
         self.task_scheduler = task_scheduler
+        self.market_regime_detector = market_regime_detector
+        self.signal_rules = signal_rules
+        self.signal_quality_tracker = signal_quality_tracker
+        self.auto_optimizer = auto_optimizer
         self.app = None
         self.monitoring = False
         self.monitoring_chats = []
@@ -330,6 +345,7 @@ class TradingBot:
         self._chart_cleanup_lock = asyncio.Lock()
         self._cache_cleanup_task: Optional[asyncio.Task] = None
         self._dashboard_cleanup_task: Optional[asyncio.Task] = None
+        self._auto_optimization_task: Optional[asyncio.Task] = None
         self._chart_cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_tasks_running: bool = False
         
@@ -798,7 +814,7 @@ class TradingBot:
                     logger.debug(f"Could not track bad request error: {e}")
     
     async def start_background_cleanup_tasks(self):
-        """Mulai background tasks untuk cleanup cache, dashboards, dan pending charts"""
+        """Mulai background tasks untuk cleanup cache, dashboards, pending charts, dan auto-optimization"""
         self._cleanup_tasks_running = True
         
         if self._cache_cleanup_task is None or self._cache_cleanup_task.done():
@@ -812,6 +828,10 @@ class TradingBot:
         if self._chart_cleanup_task is None or self._chart_cleanup_task.done():
             self._chart_cleanup_task = asyncio.create_task(self._pending_chart_cleanup_loop())
             logger.info("✅ Pending chart cleanup background task started")
+        
+        if self.auto_optimizer and (self._auto_optimization_task is None or self._auto_optimization_task.done()):
+            self._auto_optimization_task = asyncio.create_task(self._auto_optimization_loop())
+            logger.info("✅ Auto-optimization background task started")
     
     async def stop_background_cleanup_tasks(self):
         """Stop background cleanup tasks and all monitoring tasks"""
@@ -844,6 +864,15 @@ class TradingBot:
                 pass
             self._chart_cleanup_task = None
             logger.info("Pending chart cleanup task stopped")
+        
+        if self._auto_optimization_task and not self._auto_optimization_task.done():
+            self._auto_optimization_task.cancel()
+            try:
+                await asyncio.wait_for(self._auto_optimization_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            self._auto_optimization_task = None
+            logger.info("Auto-optimization task stopped")
         
         await self._cleanup_all_pending_charts()
         
@@ -914,6 +943,52 @@ class TradingBot:
                 pass
         
         self.active_dashboards.clear()
+    
+    async def _auto_optimization_loop(self):
+        """Background task untuk auto-optimization parameter strategy"""
+        optimization_interval = 3600
+        
+        try:
+            while self._cleanup_tasks_running:
+                await asyncio.sleep(optimization_interval)
+                
+                if not self._cleanup_tasks_running:
+                    break
+                
+                if not self.auto_optimizer:
+                    continue
+                
+                try:
+                    should_optimize = self.auto_optimizer.should_optimize()
+                    
+                    if should_optimize:
+                        logger.info("🔧 Starting auto-optimization check...")
+                        
+                        optimization_result = self.auto_optimizer.run_optimization()
+                        
+                        if optimization_result:
+                            changes_made = optimization_result.get('changes_made', [])
+                            if changes_made:
+                                logger.info(f"✅ Auto-optimization completed: {len(changes_made)} parameter(s) updated")
+                                
+                                if self.strategy and hasattr(self.auto_optimizer, 'apply_to_strategy'):
+                                    try:
+                                        self.auto_optimizer.apply_to_strategy(self.strategy)
+                                        logger.info("✅ Optimization applied to strategy")
+                                    except (ValueError, TypeError, AttributeError) as apply_error:
+                                        logger.warning(f"Could not apply optimization to strategy: {apply_error}")
+                            else:
+                                logger.debug("Auto-optimization: no parameter changes needed")
+                        else:
+                            logger.debug("Auto-optimization: no optimization result")
+                    else:
+                        logger.debug("Auto-optimization: not enough data or not due for optimization")
+                        
+                except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
+                    logger.error(f"Error in auto-optimization: {type(e).__name__}: {e}")
+                    
+        except asyncio.CancelledError:
+            logger.info("Auto-optimization loop cancelled")
     
     async def _signal_cache_cleanup_loop(self):
         """Background task untuk cleanup expired signal cache entries"""
@@ -1796,14 +1871,56 @@ class TradingBot:
         
         m5_indicators = await self._fetch_m5_indicators(indicator_engine)
         
-        signal = self.strategy.detect_signal(
-            indicators, 'M1', 
-            signal_source='auto',
-            m5_indicators=m5_indicators
-        )
+        market_regime = None
+        if self.market_regime_detector:
+            try:
+                df_m5 = await self.market_data.get_historical_data('M5', 100)
+                if df_m5 is not None and len(df_m5) >= 50:
+                    market_regime = self.market_regime_detector.detect_regime(df_m5)
+                    logger.debug(f"Market regime: {market_regime.get('regime', 'UNKNOWN')} (confidence: {market_regime.get('confidence', 0):.1f}%)")
+            except (ValueError, TypeError, KeyError, AttributeError) as e:
+                logger.debug(f"Market regime detection error: {e}")
+        
+        signal = None
+        signal_rule_type = None
+        
+        if self.signal_rules:
+            try:
+                df_m5_for_rules = await self.market_data.get_historical_data('M5', 100)
+                df_h1 = await self.market_data.get_historical_data('H1', 50)
+                
+                aggressive_signals = self.signal_rules.evaluate_all_rules(
+                    df_m1=df_m1,
+                    df_m5=df_m5_for_rules,
+                    df_h1=df_h1,
+                    market_regime=market_regime
+                )
+                
+                if aggressive_signals:
+                    best_signal = max(aggressive_signals, key=lambda x: x.get('confluence_score', 0))
+                    if best_signal.get('signal'):
+                        signal = best_signal
+                        signal_rule_type = best_signal.get('rule_type', 'UNKNOWN')
+                        logger.info(f"📡 Signal dari AggressiveSignalRules: {signal_rule_type} - {signal.get('signal')} (score: {best_signal.get('confluence_score', 0):.1f})")
+            except (ValueError, TypeError, KeyError, AttributeError) as e:
+                logger.debug(f"AggressiveSignalRules evaluation error: {e}")
+        
+        if not signal:
+            signal = self.strategy.detect_signal(
+                indicators, 'M1', 
+                signal_source='auto',
+                m5_indicators=m5_indicators
+            )
+            signal_rule_type = 'STRATEGY'
         
         if not signal:
             return False
+        
+        if market_regime:
+            signal['market_regime'] = market_regime.get('regime', 'UNKNOWN')
+            signal['regime_confidence'] = market_regime.get('confidence', 0)
+        if signal_rule_type:
+            signal['rule_type'] = signal_rule_type
         
         signal_direction = signal.get('signal')
         signal_price = signal.get('entry_price')
@@ -2208,6 +2325,33 @@ class TradingBot:
                 signal_sent_successfully = True
                 await self._confirm_signal_sent(user_id, signal_type, entry_price)
                 logger.info(f"✅ Signal sent - Trade:{trade_id} Position:{position_id} User:{mask_user_id(user_id)} {signal_type} @${entry_price:.2f}")
+                
+                if self.signal_quality_tracker and trade_id:
+                    try:
+                        rule_name = signal.get('rule_type', 'STRATEGY')
+                        confluence_score = signal.get('confluence_score', 0)
+                        market_regime = signal.get('market_regime', 'unknown')
+                        sl_pips = abs(entry_price - signal['stop_loss']) / 0.1 if 'stop_loss' in signal else 10.0
+                        tp_pips = abs(signal['take_profit'] - entry_price) / 0.1 if 'take_profit' in signal else 20.0
+                        
+                        signal_data = {
+                            'user_id': user_id,
+                            'signal_type': signal_type,
+                            'rule_name': rule_name,
+                            'confluence_level': confluence_score if isinstance(confluence_score, int) else int(confluence_score / 25) + 1,
+                            'market_regime': market_regime,
+                            'entry_price': entry_price,
+                            'sl_pips': sl_pips,
+                            'tp_pips': tp_pips,
+                            'confidence': signal.get('confidence', 0.5),
+                            'reason': signal.get('reason', '')
+                        }
+                        
+                        signal_quality_id = self.signal_quality_tracker.record_signal(signal_data)
+                        if signal_quality_id:
+                            logger.debug(f"📝 Signal recorded to quality tracker - ID:{signal_quality_id} Trade:{trade_id} Rule:{rule_name}")
+                    except (ValueError, TypeError, KeyError, AttributeError) as sqt_error:
+                        logger.warning(f"Failed to record signal to quality tracker: {sqt_error}")
                 
                 if signal_message and signal_message.message_id:
                     await self.start_dashboard(user_id, chat_id, position_id, signal_message.message_id)
@@ -2636,6 +2780,36 @@ class TradingBot:
                 f"Trades: {len(today_trades)}\n"
                 f"P/L: ${today_pl:.2f}\n"
             )
+            
+            if self.signal_quality_tracker:
+                try:
+                    quality_report = self.signal_quality_tracker.get_performance_report()
+                    if quality_report:
+                        msg += "\n*📈 Signal Quality Analysis:*\n"
+                        
+                        rule_stats = quality_report.get('rule_stats', {})
+                        if rule_stats:
+                            msg += "*Per Rule Type:*\n"
+                            for rule_type, stats in list(rule_stats.items())[:4]:
+                                rule_winrate = stats.get('winrate', 0)
+                                rule_signals = stats.get('total', 0)
+                                if rule_signals > 0:
+                                    msg += f"• {rule_type}: {rule_winrate:.1f}% ({rule_signals} signals)\n"
+                        
+                        best_rule = quality_report.get('best_rule')
+                        if best_rule:
+                            msg += f"\n*Best Rule:* {best_rule.get('name', 'N/A')} ({best_rule.get('winrate', 0):.1f}%)\n"
+                        
+                        regime_stats = quality_report.get('regime_stats', {})
+                        if regime_stats:
+                            msg += "\n*Per Market Regime:*\n"
+                            for regime, stats in list(regime_stats.items())[:3]:
+                                regime_winrate = stats.get('winrate', 0)
+                                regime_signals = stats.get('total', 0)
+                                if regime_signals > 0:
+                                    msg += f"• {regime}: {regime_winrate:.1f}% ({regime_signals})\n"
+                except (ValueError, TypeError, KeyError, AttributeError) as sqt_error:
+                    logger.debug(f"Could not get signal quality report: {sqt_error}")
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             
@@ -3240,6 +3414,241 @@ class TradingBot:
             logger.error(f"Error resetting system: {e}")
             await update.message.reply_text("❌ Error reset sistem. Cek logs untuk detail.")
     
+    async def regime_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tampilkan analisis market regime saat ini"""
+        if update.effective_user is None or update.message is None:
+            return
+        
+        if not self.is_authorized(update.effective_user.id):
+            return
+        
+        user_id = update.effective_user.id
+        
+        try:
+            if not self.market_regime_detector:
+                await update.message.reply_text("⚠️ Market Regime Detector tidak tersedia.")
+                return
+            
+            await update.message.reply_text("🔍 Menganalisis market regime...")
+            
+            df_m5 = await self.market_data.get_historical_data('M5', 100)
+            if df_m5 is None or len(df_m5) < 50:
+                await update.message.reply_text("❌ Data market tidak cukup untuk analisis regime.")
+                return
+            
+            regime_analysis = self.market_regime_detector.detect_regime(df_m5)
+            
+            if not regime_analysis:
+                await update.message.reply_text("❌ Gagal menganalisis market regime.")
+                return
+            
+            regime_type = regime_analysis.get('regime', 'UNKNOWN')
+            confidence = regime_analysis.get('confidence', 0)
+            volatility = regime_analysis.get('volatility', 'UNKNOWN')
+            trend_strength = regime_analysis.get('trend_strength', 0)
+            adx_value = regime_analysis.get('adx', 0)
+            
+            regime_emoji = {
+                'TRENDING': '📈',
+                'RANGING': '↔️',
+                'VOLATILE': '⚡',
+                'BREAKOUT': '🚀',
+                'REVERSAL': '🔄',
+                'UNKNOWN': '❓'
+            }.get(regime_type, '❓')
+            
+            vol_emoji = {
+                'HIGH': '🔴',
+                'MEDIUM': '🟡',
+                'LOW': '🟢'
+            }.get(volatility, '⚪')
+            
+            msg = (
+                f"📊 *Market Regime Analysis*\n\n"
+                f"*Regime:* {regime_emoji} {regime_type}\n"
+                f"*Confidence:* {confidence:.1f}%\n\n"
+                f"*Market Conditions:*\n"
+                f"• Volatility: {vol_emoji} {volatility}\n"
+                f"• Trend Strength: {trend_strength:.1f}%\n"
+                f"• ADX: {adx_value:.1f}\n\n"
+            )
+            
+            sr_levels = regime_analysis.get('support_resistance', {})
+            if sr_levels:
+                msg += "*Support/Resistance Levels:*\n"
+                if sr_levels.get('resistance'):
+                    msg += f"• Resistance: ${sr_levels['resistance'][-1]:.2f}\n"
+                if sr_levels.get('support'):
+                    msg += f"• Support: ${sr_levels['support'][-1]:.2f}\n"
+                msg += "\n"
+            
+            recommended_rules = regime_analysis.get('recommended_rules', [])
+            if recommended_rules:
+                msg += "*Recommended Signal Rules:*\n"
+                for rule in recommended_rules[:3]:
+                    msg += f"• {rule}\n"
+            
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            logger.info(f"Regime command executed for user {mask_user_id(user_id)}")
+            
+        except asyncio.CancelledError:
+            logger.info(f"Regime command cancelled for user {mask_user_id(user_id)}")
+            raise
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Error in regime command: {type(e).__name__}: {e}")
+            try:
+                await update.message.reply_text("❌ Error menganalisis market regime.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+
+    async def optimize_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tampilkan status dan history auto-optimizer"""
+        if update.effective_user is None or update.message is None:
+            return
+        
+        if not self.is_authorized(update.effective_user.id):
+            return
+        
+        user_id = update.effective_user.id
+        
+        try:
+            if not self.auto_optimizer:
+                await update.message.reply_text("⚠️ Auto Optimizer tidak tersedia.")
+                return
+            
+            status = self.auto_optimizer.get_status()
+            
+            is_enabled = status.get('enabled', False)
+            last_optimization = status.get('last_optimization')
+            optimization_count = status.get('optimization_count', 0)
+            next_optimization = status.get('next_optimization')
+            
+            status_emoji = "✅" if is_enabled else "⏸️"
+            
+            msg = (
+                f"🔧 *Auto-Optimizer Status*\n\n"
+                f"*Status:* {status_emoji} {'Aktif' if is_enabled else 'Non-aktif'}\n"
+                f"*Total Optimizations:* {optimization_count}\n"
+            )
+            
+            if last_optimization:
+                msg += f"*Last Optimization:* {last_optimization}\n"
+            
+            if next_optimization:
+                msg += f"*Next Scheduled:* {next_optimization}\n"
+            
+            msg += "\n"
+            
+            current_params = status.get('current_parameters', {})
+            if current_params:
+                msg += "*Current Parameters:*\n"
+                for key, value in list(current_params.items())[:5]:
+                    if isinstance(value, float):
+                        msg += f"• {key}: {value:.3f}\n"
+                    else:
+                        msg += f"• {key}: {value}\n"
+                msg += "\n"
+            
+            recent_changes = status.get('recent_changes', [])
+            if recent_changes:
+                msg += "*Recent Parameter Changes:*\n"
+                for change in recent_changes[:3]:
+                    param = change.get('parameter', 'Unknown')
+                    old_val = change.get('old_value', 0)
+                    new_val = change.get('new_value', 0)
+                    msg += f"• {param}: {old_val:.3f} → {new_val:.3f}\n"
+                msg += "\n"
+            
+            performance_impact = status.get('performance_impact', {})
+            if performance_impact:
+                winrate_before = performance_impact.get('winrate_before', 0)
+                winrate_after = performance_impact.get('winrate_after', 0)
+                improvement = winrate_after - winrate_before
+                trend_emoji = "📈" if improvement > 0 else "📉" if improvement < 0 else "➡️"
+                msg += f"*Performance Impact:*\n"
+                msg += f"• Win Rate: {winrate_before:.1f}% → {winrate_after:.1f}% {trend_emoji}\n"
+            
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            logger.info(f"Optimize command executed for user {mask_user_id(user_id)}")
+            
+        except asyncio.CancelledError:
+            logger.info(f"Optimize command cancelled for user {mask_user_id(user_id)}")
+            raise
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Error in optimize command: {type(e).__name__}: {e}")
+            try:
+                await update.message.reply_text("❌ Error mengambil status optimizer.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+
+    async def rules_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tampilkan status semua signal rules dan statistiknya"""
+        if update.effective_user is None or update.message is None:
+            return
+        
+        if not self.is_authorized(update.effective_user.id):
+            return
+        
+        user_id = update.effective_user.id
+        
+        try:
+            if not self.signal_rules:
+                await update.message.reply_text("⚠️ Signal Rules tidak tersedia.")
+                return
+            
+            rules_status = self.signal_rules.get_rules_status()
+            
+            msg = "📋 *Signal Rules Status*\n\n"
+            
+            rule_types = [
+                ('M1_SCALP', '⚡', 'M1 Scalping'),
+                ('M5_SWING', '📊', 'M5 Swing'),
+                ('SR_REVERSION', '🔄', 'S/R Reversion'),
+                ('BREAKOUT', '🚀', 'Breakout')
+            ]
+            
+            for rule_id, emoji, rule_name in rule_types:
+                rule_data = rules_status.get(rule_id, {})
+                is_enabled = rule_data.get('enabled', False)
+                signals_count = rule_data.get('signals_generated', 0)
+                win_rate = rule_data.get('win_rate', 0)
+                last_signal = rule_data.get('last_signal')
+                
+                status_icon = "✅" if is_enabled else "❌"
+                
+                msg += f"{emoji} *{rule_name}* {status_icon}\n"
+                msg += f"   • Signals: {signals_count}\n"
+                if win_rate > 0:
+                    msg += f"   • Win Rate: {win_rate:.1f}%\n"
+                if last_signal:
+                    msg += f"   • Last: {last_signal}\n"
+                msg += "\n"
+            
+            total_signals = sum(r.get('signals_generated', 0) for r in rules_status.values())
+            avg_winrate = rules_status.get('overall_winrate', 0)
+            
+            msg += f"*Ringkasan:*\n"
+            msg += f"• Total Signals: {total_signals}\n"
+            if avg_winrate > 0:
+                msg += f"• Overall Win Rate: {avg_winrate:.1f}%\n"
+            
+            best_rule = rules_status.get('best_performing_rule')
+            if best_rule:
+                msg += f"• Best Performing: {best_rule}\n"
+            
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            logger.info(f"Rules command executed for user {mask_user_id(user_id)}")
+            
+        except asyncio.CancelledError:
+            logger.info(f"Rules command cancelled for user {mask_user_id(user_id)}")
+            raise
+        except (TelegramError, asyncio.TimeoutError, ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error(f"Error in rules command: {type(e).__name__}: {e}")
+            try:
+                await update.message.reply_text("❌ Error mengambil status signal rules.")
+            except (TelegramError, asyncio.CancelledError):
+                pass
+
     async def initialize(self):
         if not self.config.TELEGRAM_BOT_TOKEN:
             logger.error("Telegram bot token not configured!")
@@ -3279,6 +3688,9 @@ class TradingBot:
         self.app.add_handler(CommandHandler("tasks", self.tasks_command))
         self.app.add_handler(CommandHandler("settings", self.settings_command))
         self.app.add_handler(CommandHandler("riset", self.riset_command))
+        self.app.add_handler(CommandHandler("regime", self.regime_command))
+        self.app.add_handler(CommandHandler("optimize", self.optimize_command))
+        self.app.add_handler(CommandHandler("rules", self.rules_command))
         
         logger.info("Initializing Telegram bot...")
         await self.app.initialize()

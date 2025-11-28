@@ -907,6 +907,28 @@ class AutoOptimizer:
                 worst = name
         return worst
     
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Return status dict untuk command /optimize.
+        
+        Returns:
+            Dict dengan status optimization
+        """
+        with self._lock:
+            last_opt = self._optimization_history[-1] if self._optimization_history else None
+            return {
+                'enabled': self._is_enabled,
+                'optimization_count': len(self._optimization_history),
+                'last_optimization': str(self._last_optimization_time.isoformat()) if self._last_optimization_time else None,
+                'next_optimization': 'Soon' if self._is_enabled else 'N/A',
+                'current_parameters': self._current_parameters.to_dict(),
+                'recent_changes': [adj.to_dict() for adj in (last_opt.adjustments if last_opt else [])],
+                'performance_impact': {
+                    'winrate_before': last_opt.analysis_summary.get('overall_accuracy', 0) * 100 if last_opt and last_opt.analysis_summary else 0,
+                    'winrate_after': last_opt.analysis_summary.get('overall_accuracy', 0) * 100 if last_opt and last_opt.analysis_summary else 0
+                } if last_opt else {}
+            }
+    
     def get_status_report(self) -> str:
         """
         Generate status report untuk Telegram.

@@ -1689,9 +1689,21 @@ class PositionTracker:
     def has_active_position(self, user_id: int) -> bool:
         """Check if user has active position with multi-source verification including DB fallback
         
+        ⚠️ DEPRECATED: Gunakan has_active_position_async() untuk operasi kritis dalam context async.
+        
         CATATAN THREAD-SAFETY:
-        Method ini BUKAN sepenuhnya thread-safe karena mengakses active_positions
-        tanpa lock. Untuk operasi kritis di context async, gunakan has_active_position_async().
+        Method sinkron ini mengakses active_positions tanpa asyncio.Lock.
+        Dalam context async dengan concurrent tasks, gunakan has_active_position_async()
+        untuk thread-safety yang lebih baik.
+        
+        Method ini aman digunakan untuk:
+        - Quick read-only checks di synchronous code
+        - Non-critical logging/debugging
+        - Fallback ketika async context tidak tersedia
+        
+        JANGAN gunakan untuk:
+        - Signal creation decisions (gunakan has_active_position_async)
+        - Race-critical position checks (gunakan has_active_position_async)
         
         Checks multiple sources for redundancy:
         1. In-memory active_positions cache (non-locked, read-only)
@@ -1700,7 +1712,6 @@ class PositionTracker:
         NOTE: Does NOT check SignalSessionManager to avoid circular dependency
         Session != Position. Session tracks pending signal, Position tracks actual trade.
         """
-        # Check 1: In-memory cache
         if user_id in self.active_positions and len(self.active_positions[user_id]) > 0:
             return True
         

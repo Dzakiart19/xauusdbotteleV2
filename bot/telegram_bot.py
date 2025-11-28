@@ -959,30 +959,24 @@ class TradingBot:
                     continue
                 
                 try:
-                    should_optimize = self.auto_optimizer.should_optimize()
+                    should_optimize, optimize_reason = self.auto_optimizer.should_run_optimization()
                     
                     if should_optimize:
-                        logger.info("🔧 Starting auto-optimization check...")
+                        logger.info(f"🔧 Starting auto-optimization check: {optimize_reason}")
                         
                         optimization_result = self.auto_optimizer.run_optimization()
                         
                         if optimization_result:
-                            changes_made = optimization_result.get('changes_made', [])
-                            if changes_made:
-                                logger.info(f"✅ Auto-optimization completed: {len(changes_made)} parameter(s) updated")
-                                
-                                if self.strategy and hasattr(self.auto_optimizer, 'apply_to_strategy'):
-                                    try:
-                                        self.auto_optimizer.apply_to_strategy(self.strategy)
-                                        logger.info("✅ Optimization applied to strategy")
-                                    except (ValueError, TypeError, AttributeError) as apply_error:
-                                        logger.warning(f"Could not apply optimization to strategy: {apply_error}")
+                            adjustments = optimization_result.adjustments if hasattr(optimization_result, 'adjustments') else []
+                            if adjustments:
+                                logger.info(f"✅ Auto-optimization completed: {len(adjustments)} parameter(s) updated")
+                                logger.debug(f"Optimization status: {optimization_result.status}")
                             else:
                                 logger.debug("Auto-optimization: no parameter changes needed")
                         else:
                             logger.debug("Auto-optimization: no optimization result")
                     else:
-                        logger.debug("Auto-optimization: not enough data or not due for optimization")
+                        logger.debug(f"Auto-optimization: {optimize_reason}")
                         
                 except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
                     logger.error(f"Error in auto-optimization: {type(e).__name__}: {e}")
@@ -1887,8 +1881,10 @@ class TradingBot:
             try:
                 df_m5 = await self.market_data.get_historical_data('M5', 100)
                 if df_m5 is not None and len(df_m5) >= 50:
-                    market_regime = self.market_regime_detector.detect_regime(df_m5)
-                    logger.debug(f"Market regime: {market_regime.get('regime', 'UNKNOWN')} (confidence: {market_regime.get('confidence', 0):.1f}%)")
+                    regime_result = self.market_regime_detector.get_regime(indicators, df_m1, df_m5)
+                    if regime_result:
+                        market_regime = regime_result.to_dict()
+                        logger.debug(f"Market regime: {market_regime.get('regime_type', 'UNKNOWN')} (confidence: {market_regime.get('confidence', 0):.2f})")
             except (ValueError, TypeError, KeyError, AttributeError) as e:
                 logger.debug(f"Market regime detection error: {e}")
         
@@ -1900,19 +1896,27 @@ class TradingBot:
                 df_m5_for_rules = await self.market_data.get_historical_data('M5', 100)
                 df_h1 = await self.market_data.get_historical_data('H1', 50)
                 
-                aggressive_signals = self.signal_rules.evaluate_all_rules(
+                best_signal_result = self.signal_rules.get_best_signal(
                     df_m1=df_m1,
                     df_m5=df_m5_for_rules,
-                    df_h1=df_h1,
-                    market_regime=market_regime
+                    df_h1=df_h1
                 )
                 
-                if aggressive_signals:
-                    best_signal = max(aggressive_signals, key=lambda x: x.get('confluence_score', 0))
-                    if best_signal.get('signal'):
-                        signal = best_signal
-                        signal_rule_type = best_signal.get('rule_type', 'UNKNOWN')
-                        logger.info(f"📡 Signal dari AggressiveSignalRules: {signal_rule_type} - {signal.get('signal')} (score: {best_signal.get('confluence_score', 0):.1f})")
+                if best_signal_result and best_signal_result.is_valid():
+                    signal_dict = best_signal_result.to_dict()
+                    signal = {
+                        'signal': signal_dict.get('signal_type'),
+                        'entry_price': signal_dict.get('entry_price', 0),
+                        'stop_loss': signal_dict.get('entry_price', 0) - (signal_dict.get('sl_pips', 10) * 0.1) if signal_dict.get('signal_type') == 'BUY' else signal_dict.get('entry_price', 0) + (signal_dict.get('sl_pips', 10) * 0.1),
+                        'take_profit': signal_dict.get('entry_price', 0) + (signal_dict.get('tp_pips', 20) * 0.1) if signal_dict.get('signal_type') == 'BUY' else signal_dict.get('entry_price', 0) - (signal_dict.get('tp_pips', 20) * 0.1),
+                        'confidence': signal_dict.get('confidence', 0),
+                        'confluence_score': signal_dict.get('confluence_count', 0) * 25,
+                        'reason': signal_dict.get('reason', ''),
+                        'rule_type': signal_dict.get('rule_name', 'UNKNOWN'),
+                        'timeframe': 'M1'
+                    }
+                    signal_rule_type = signal_dict.get('rule_name', 'UNKNOWN')
+                    logger.info(f"📡 Signal dari AggressiveSignalRules: {signal_rule_type} - {signal.get('signal')} (confidence: {signal_dict.get('confidence', 0):.2f})")
             except (ValueError, TypeError, KeyError, AttributeError) as e:
                 logger.debug(f"AggressiveSignalRules evaluation error: {e}")
         
@@ -1933,10 +1937,13 @@ class TradingBot:
         if signal_rule_type:
             signal['rule_type'] = signal_rule_type
         
-        signal_direction = signal.get('signal')
-        signal_price = signal.get('entry_price')
+        signal_direction = signal.get('signal', '')
+        signal_price = signal.get('entry_price', 0.0)
         
-        if self._is_duplicate_signal(ctx, signal_direction, signal_price, now):
+        if not signal_direction or not signal_price:
+            return False
+        
+        if self._is_duplicate_signal(ctx, str(signal_direction), float(signal_price), now):
             return False
         
         time_since_last_check = (now - ctx.last_signal_check).total_seconds()
@@ -2337,7 +2344,7 @@ class TradingBot:
                 await self._confirm_signal_sent(user_id, signal_type, entry_price)
                 logger.info(f"✅ Signal sent - Trade:{trade_id} Position:{position_id} User:{mask_user_id(user_id)} {signal_type} @${entry_price:.2f}")
                 
-                if self.signal_quality_tracker and trade_id:
+                if self.signal_quality_tracker and trade_id is not None:
                     try:
                         rule_name = signal.get('rule_type', 'STRATEGY')
                         confluence_score = signal.get('confluence_score', 0)
@@ -2794,28 +2801,33 @@ class TradingBot:
             
             if self.signal_quality_tracker:
                 try:
-                    quality_report = self.signal_quality_tracker.get_performance_report()
-                    if quality_report:
+                    quality_stats = self.signal_quality_tracker.get_overall_stats(days=30)
+                    if quality_stats and quality_stats.get('total_signals', 0) > 0:
                         msg += "\n*📈 Signal Quality Analysis:*\n"
                         
-                        rule_stats = quality_report.get('rule_stats', {})
-                        if rule_stats:
+                        accuracy_by_type = quality_stats.get('accuracy_by_type', {})
+                        if accuracy_by_type:
                             msg += "*Per Rule Type:*\n"
-                            for rule_type, stats in list(rule_stats.items())[:4]:
-                                rule_winrate = stats.get('winrate', 0)
+                            for rule_type, stats in list(accuracy_by_type.items())[:4]:
+                                rule_winrate = stats.get('accuracy', 0) * 100
                                 rule_signals = stats.get('total', 0)
                                 if rule_signals > 0:
                                     msg += f"• {rule_type}: {rule_winrate:.1f}% ({rule_signals} signals)\n"
                         
-                        best_rule = quality_report.get('best_rule')
-                        if best_rule:
-                            msg += f"\n*Best Rule:* {best_rule.get('name', 'N/A')} ({best_rule.get('winrate', 0):.1f}%)\n"
+                        best_type = None
+                        best_accuracy = 0
+                        for rule_type, stats in accuracy_by_type.items():
+                            if stats.get('total', 0) >= 5 and stats.get('accuracy', 0) > best_accuracy:
+                                best_accuracy = stats.get('accuracy', 0)
+                                best_type = rule_type
+                        if best_type:
+                            msg += f"\n*Best Rule:* {best_type} ({best_accuracy * 100:.1f}%)\n"
                         
-                        regime_stats = quality_report.get('regime_stats', {})
-                        if regime_stats:
+                        accuracy_by_regime = quality_stats.get('accuracy_by_regime', {})
+                        if accuracy_by_regime:
                             msg += "\n*Per Market Regime:*\n"
-                            for regime, stats in list(regime_stats.items())[:3]:
-                                regime_winrate = stats.get('winrate', 0)
+                            for regime, stats in list(accuracy_by_regime.items())[:3]:
+                                regime_winrate = stats.get('accuracy', 0) * 100
                                 regime_signals = stats.get('total', 0)
                                 if regime_signals > 0:
                                     msg += f"• {regime}: {regime_winrate:.1f}% ({regime_signals})\n"
@@ -3447,30 +3459,42 @@ class TradingBot:
                 await update.message.reply_text("❌ Data market tidak cukup untuk analisis regime.")
                 return
             
-            regime_analysis = self.market_regime_detector.detect_regime(df_m5)
+            from bot.indicators import IndicatorEngine
+            indicator_engine = IndicatorEngine(self.config)
+            indicators = indicator_engine.get_indicators(df_m5)
             
-            if not regime_analysis:
+            if indicators is None:
+                indicators = {}
+            
+            regime_result = self.market_regime_detector.get_regime(indicators, None, df_m5)
+            
+            if not regime_result:
                 await update.message.reply_text("❌ Gagal menganalisis market regime.")
                 return
             
-            regime_type = regime_analysis.get('regime', 'UNKNOWN')
-            confidence = regime_analysis.get('confidence', 0)
-            volatility = regime_analysis.get('volatility', 'UNKNOWN')
-            trend_strength = regime_analysis.get('trend_strength', 0)
-            adx_value = regime_analysis.get('adx', 0)
+            regime_analysis = regime_result.to_dict()
+            
+            regime_type = regime_analysis.get('regime_type', 'unknown').upper()
+            confidence = regime_analysis.get('confidence', 0) * 100
+            volatility_info = regime_analysis.get('volatility', {})
+            volatility = volatility_info.get('level', 'normal').upper() if isinstance(volatility_info, dict) else 'NORMAL'
+            trend_info = regime_analysis.get('trend', {})
+            trend_strength = trend_info.get('adx', 0) if isinstance(trend_info, dict) else 0
+            adx_value = trend_info.get('adx', 0) if isinstance(trend_info, dict) else 0
             
             regime_emoji = {
-                'TRENDING': '📈',
-                'RANGING': '↔️',
-                'VOLATILE': '⚡',
+                'STRONG_TREND': '📈',
+                'MODERATE_TREND': '📈',
+                'WEAK_TREND': '📉',
+                'RANGE_BOUND': '↔️',
+                'HIGH_VOLATILITY': '⚡',
                 'BREAKOUT': '🚀',
-                'REVERSAL': '🔄',
                 'UNKNOWN': '❓'
             }.get(regime_type, '❓')
             
             vol_emoji = {
                 'HIGH': '🔴',
-                'MEDIUM': '🟡',
+                'NORMAL': '🟡',
                 'LOW': '🟢'
             }.get(volatility, '⚪')
             
@@ -3480,22 +3504,26 @@ class TradingBot:
                 f"*Confidence:* {confidence:.1f}%\n\n"
                 f"*Market Conditions:*\n"
                 f"• Volatility: {vol_emoji} {volatility}\n"
-                f"• Trend Strength: {trend_strength:.1f}%\n"
-                f"• ADX: {adx_value:.1f}\n\n"
+                f"• ADX: {adx_value:.1f}\n"
+                f"• Bias: {regime_analysis.get('bias', 'NEUTRAL')}\n\n"
             )
             
-            sr_levels = regime_analysis.get('support_resistance', {})
-            if sr_levels:
-                msg += "*Support/Resistance Levels:*\n"
-                if sr_levels.get('resistance'):
-                    msg += f"• Resistance: ${sr_levels['resistance'][-1]:.2f}\n"
-                if sr_levels.get('support'):
-                    msg += f"• Support: ${sr_levels['support'][-1]:.2f}\n"
-                msg += "\n"
+            price_position = regime_analysis.get('price_position', {})
+            if price_position:
+                support = price_position.get('support', 0)
+                resistance = price_position.get('resistance', 0)
+                if support > 0 or resistance > 0:
+                    msg += "*Support/Resistance Levels:*\n"
+                    if resistance > 0:
+                        msg += f"• Resistance: ${resistance:.2f}\n"
+                    if support > 0:
+                        msg += f"• Support: ${support:.2f}\n"
+                    msg += "\n"
             
-            recommended_rules = regime_analysis.get('recommended_rules', [])
+            recommendations = regime_analysis.get('recommendations', {})
+            recommended_rules = recommendations.get('use', []) if isinstance(recommendations, dict) else []
             if recommended_rules:
-                msg += "*Recommended Signal Rules:*\n"
+                msg += "*Recommended Strategies:*\n"
                 for rule in recommended_rules[:3]:
                     msg += f"• {rule}\n"
             
@@ -3607,45 +3635,57 @@ class TradingBot:
                 await update.message.reply_text("⚠️ Signal Rules tidak tersedia.")
                 return
             
-            rules_status = self.signal_rules.get_rules_status()
-            
             msg = "📋 *Signal Rules Status*\n\n"
             
             rule_types = [
-                ('M1_SCALP', '⚡', 'M1 Scalping'),
-                ('M5_SWING', '📊', 'M5 Swing'),
-                ('SR_REVERSION', '🔄', 'S/R Reversion'),
-                ('BREAKOUT', '🚀', 'Breakout')
+                ('M1_SCALP', '⚡', 'M1 Scalping', 'check_m1_scalp_signal'),
+                ('M5_SWING', '📊', 'M5 Swing', 'check_m5_swing_signal'),
+                ('SR_REVERSION', '🔄', 'S/R Reversion', 'check_sr_reversion_signal'),
+                ('BREAKOUT', '🚀', 'Breakout', 'check_breakout_signal')
             ]
             
-            for rule_id, emoji, rule_name in rule_types:
-                rule_data = rules_status.get(rule_id, {})
-                is_enabled = rule_data.get('enabled', False)
-                signals_count = rule_data.get('signals_generated', 0)
-                win_rate = rule_data.get('win_rate', 0)
-                last_signal = rule_data.get('last_signal')
-                
+            for rule_id, emoji, rule_name, method_name in rule_types:
+                is_enabled = hasattr(self.signal_rules, method_name)
                 status_icon = "✅" if is_enabled else "❌"
                 
                 msg += f"{emoji} *{rule_name}* {status_icon}\n"
-                msg += f"   • Signals: {signals_count}\n"
-                if win_rate > 0:
-                    msg += f"   • Win Rate: {win_rate:.1f}%\n"
-                if last_signal:
-                    msg += f"   • Last: {last_signal}\n"
+                msg += f"   • Status: {'Aktif' if is_enabled else 'Tidak Aktif'}\n"
                 msg += "\n"
             
-            total_signals = sum(r.get('signals_generated', 0) for r in rules_status.values())
-            avg_winrate = rules_status.get('overall_winrate', 0)
-            
-            msg += f"*Ringkasan:*\n"
-            msg += f"• Total Signals: {total_signals}\n"
-            if avg_winrate > 0:
-                msg += f"• Overall Win Rate: {avg_winrate:.1f}%\n"
-            
-            best_rule = rules_status.get('best_performing_rule')
-            if best_rule:
-                msg += f"• Best Performing: {best_rule}\n"
+            if self.signal_quality_tracker:
+                try:
+                    quality_stats = self.signal_quality_tracker.get_overall_stats(days=7)
+                    if quality_stats and quality_stats.get('total_signals', 0) > 0:
+                        accuracy_by_type = quality_stats.get('accuracy_by_type', {})
+                        
+                        msg += "*📊 Statistik Signal (7 hari):*\n"
+                        total_signals = 0
+                        best_rule = None
+                        best_accuracy = 0
+                        
+                        for rule_type, stats in accuracy_by_type.items():
+                            rule_signals = stats.get('total', 0)
+                            rule_accuracy = stats.get('accuracy', 0) * 100
+                            total_signals += rule_signals
+                            
+                            if rule_signals > 0:
+                                msg += f"• {rule_type}: {rule_accuracy:.1f}% ({rule_signals} signals)\n"
+                            
+                            if stats.get('total', 0) >= 3 and stats.get('accuracy', 0) > best_accuracy:
+                                best_accuracy = stats.get('accuracy', 0)
+                                best_rule = rule_type
+                        
+                        msg += f"\n*Ringkasan:*\n"
+                        msg += f"• Total Signals: {total_signals}\n"
+                        msg += f"• Overall Win Rate: {quality_stats.get('overall_accuracy', 0) * 100:.1f}%\n"
+                        
+                        if best_rule:
+                            msg += f"• Best Performing: {best_rule}\n"
+                except (ValueError, TypeError, KeyError, AttributeError) as e:
+                    logger.debug(f"Could not get quality stats for rules: {e}")
+            else:
+                msg += "*Ringkasan:*\n"
+                msg += "• Signal Quality Tracker tidak tersedia untuk statistik\n"
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             logger.info(f"Rules command executed for user {mask_user_id(user_id)}")

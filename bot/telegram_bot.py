@@ -3571,7 +3571,8 @@ class TradingBot:
             )
             
             if last_optimization:
-                msg += f"*Last Optimization:* {last_optimization}\n"
+                last_opt_str = str(last_optimization).replace('_', ' ')
+                msg += f"*Last Optimization:* {last_opt_str}\n"
             
             if next_optimization:
                 msg += f"*Next Scheduled:* {next_optimization}\n"
@@ -3581,31 +3582,50 @@ class TradingBot:
             current_params = status.get('current_parameters', {})
             if current_params:
                 msg += "*Current Parameters:*\n"
-                for key, value in list(current_params.items())[:5]:
+                param_display = {
+                    'min_confluence_required': 'Min Confluence',
+                    'volume_threshold_multiplier': 'Volume Multiplier',
+                    'ema_strictness': 'EMA Strictness',
+                    'signal_cooldown': 'Signal Cooldown',
+                    'enable_m5_low_adx': 'M5 Low ADX',
+                    'three_confluence_weight': '3-Conf Weight',
+                    'adx_threshold_for_m5': 'ADX Threshold M5'
+                }
+                for key, value in list(current_params.items())[:7]:
+                    display_name = param_display.get(key, key.replace('_', ' ').title())
                     if isinstance(value, float):
-                        msg += f"• {key}: {value:.3f}\n"
+                        msg += f"  {display_name}: {value:.2f}\n"
+                    elif isinstance(value, bool):
+                        msg += f"  {display_name}: {'Ya' if value else 'Tidak'}\n"
+                    elif isinstance(value, list):
+                        if value:
+                            msg += f"  {display_name}: {len(value)} items\n"
                     else:
-                        msg += f"• {key}: {value}\n"
+                        msg += f"  {display_name}: {value}\n"
                 msg += "\n"
             
             recent_changes = status.get('recent_changes', [])
             if recent_changes:
-                msg += "*Recent Parameter Changes:*\n"
+                msg += "*Perubahan Terakhir:*\n"
                 for change in recent_changes[:3]:
-                    param = change.get('parameter', 'Unknown')
+                    param = change.get('parameter_name', change.get('parameter', 'Unknown'))
+                    param_display_name = param.replace('_', ' ').title()
                     old_val = change.get('old_value', 0)
                     new_val = change.get('new_value', 0)
-                    msg += f"• {param}: {old_val:.3f} → {new_val:.3f}\n"
+                    if isinstance(old_val, float) and isinstance(new_val, float):
+                        msg += f"  {param_display_name}: {old_val:.2f} -> {new_val:.2f}\n"
+                    else:
+                        msg += f"  {param_display_name}: {old_val} -> {new_val}\n"
                 msg += "\n"
             
             performance_impact = status.get('performance_impact', {})
-            if performance_impact:
+            if performance_impact and performance_impact.get('winrate_before', 0) > 0:
                 winrate_before = performance_impact.get('winrate_before', 0)
                 winrate_after = performance_impact.get('winrate_after', 0)
                 improvement = winrate_after - winrate_before
                 trend_emoji = "📈" if improvement > 0 else "📉" if improvement < 0 else "➡️"
                 msg += f"*Performance Impact:*\n"
-                msg += f"• Win Rate: {winrate_before:.1f}% → {winrate_after:.1f}% {trend_emoji}\n"
+                msg += f"  Win Rate: {winrate_before:.1f}% -> {winrate_after:.1f}% {trend_emoji}\n"
             
             await update.message.reply_text(msg, parse_mode='Markdown')
             logger.info(f"Optimize command executed for user {mask_user_id(user_id)}")

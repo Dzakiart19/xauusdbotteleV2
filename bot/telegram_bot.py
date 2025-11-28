@@ -9,7 +9,9 @@ from telegram import error as telegram_error
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
-from typing import Optional, List, Callable, Any, Dict
+from typing import Optional, List, Callable, Any, Dict, Tuple
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from functools import wraps
 import time
 from bot.logger import setup_logger, mask_user_id, mask_token, sanitize_log_message
@@ -20,6 +22,58 @@ from bot.message_templates import MessageFormatter
 from bot.resilience import RateLimiter
 
 logger = setup_logger('TelegramBot')
+
+
+class MonitoringAction(Enum):
+    """Actions returned by monitoring helper coroutines"""
+    CONTINUE = auto()
+    SKIP_TICK = auto()
+    PROCESS_SIGNAL = auto()
+    BREAK_LOOP = auto()
+    RESUBSCRIBE = auto()
+
+
+@dataclass
+class MonitoringContext:
+    """Mutable state container for monitoring loop - reduces parameter passing"""
+    chat_id: int
+    last_signal_check: datetime = field(default_factory=lambda: datetime.now() - timedelta(seconds=60))
+    last_tick_process_time: datetime = field(default_factory=lambda: datetime.now() - timedelta(seconds=1))
+    last_sent_signal: Optional[str] = None
+    last_sent_signal_price: Optional[float] = None
+    last_sent_signal_time: datetime = field(default_factory=lambda: datetime.now() - timedelta(seconds=5))
+    retry_delay: float = 1.0
+    max_retry_delay: float = 30.0
+    last_candle_timestamp: Any = None
+    consecutive_timeouts: int = 0
+    max_consecutive_timeouts: int = 5
+    daily_summary_skip_count: int = 0
+    last_daily_summary_log_time: datetime = field(default_factory=lambda: datetime.now() - timedelta(seconds=60))
+    
+    def reset_retry_delay(self):
+        """Reset retry delay setelah sukses"""
+        self.retry_delay = 1.0
+    
+    def increase_retry_delay(self):
+        """Increase retry delay dengan exponential backoff"""
+        self.retry_delay = min(self.retry_delay * 2, self.max_retry_delay)
+    
+    def record_timeout(self) -> bool:
+        """Record timeout dan return True jika perlu resubscribe"""
+        self.consecutive_timeouts += 1
+        return self.consecutive_timeouts >= self.max_consecutive_timeouts
+    
+    def reset_timeouts(self):
+        """Reset timeout counter"""
+        self.consecutive_timeouts = 0
+    
+    def update_last_signal(self, direction: Optional[str], price: Optional[float], timestamp: datetime):
+        """Update tracking sinyal terakhir"""
+        if direction is not None:
+            self.last_sent_signal = direction
+        if price is not None:
+            self.last_sent_signal_price = price
+        self.last_sent_signal_time = timestamp
 
 class TelegramBotError(Exception):
     """Base exception for Telegram bot errors"""
@@ -1590,240 +1644,260 @@ class TradingBot:
             except (TelegramError, asyncio.CancelledError):
                 pass
     
+    async def _check_daily_summary_pause(self, ctx: MonitoringContext) -> bool:
+        """Cek apakah perlu pause untuk daily summary. Returns True jika harus skip."""
+        if not (self.alert_system and self.alert_system.is_sending_daily_summary()):
+            if ctx.daily_summary_skip_count > 0:
+                logger.info(f"📊 [MONITORING] Daily summary selesai - signal detection resume (total skip: {ctx.daily_summary_skip_count}) | User:{mask_user_id(ctx.chat_id)}")
+                ctx.daily_summary_skip_count = 0
+            return False
+        
+        ctx.daily_summary_skip_count += 1
+        now_check = datetime.now()
+        
+        if (now_check - ctx.last_daily_summary_log_time).total_seconds() >= 10:
+            logger.debug(f"📊 [MONITORING] Skip signal detection - daily summary sedang dikirim (skip count: {ctx.daily_summary_skip_count}) | User:{mask_user_id(ctx.chat_id)}")
+            ctx.last_daily_summary_log_time = now_check
+        
+        await asyncio.sleep(0.5)
+        return True
+    
+    async def _check_position_eligibility(self, ctx: MonitoringContext) -> Tuple[bool, Optional[str]]:
+        """Cek apakah user eligible untuk sinyal baru. Returns (can_proceed, block_reason)."""
+        if self.signal_session_manager:
+            can_create, block_reason = await self.signal_session_manager.can_create_signal(
+                ctx.chat_id, 'auto', position_tracker=self.position_tracker
+            )
+            if not can_create:
+                logger.debug(f"⏸️ Signal blocked - {block_reason} | User:{mask_user_id(ctx.chat_id)} | Will recheck in 0.5s")
+                await asyncio.sleep(0.5)
+                return False, block_reason
+        elif await self.position_tracker.has_active_position_async(ctx.chat_id):
+            logger.debug(f"⏸️ Signal blocked - active position exists | User:{mask_user_id(ctx.chat_id)} | Will recheck in 0.5s")
+            await asyncio.sleep(0.5)
+            return False, "active position exists"
+        else:
+            logger.debug(f"✅ No active position - ready for new signal | User:{mask_user_id(ctx.chat_id)}")
+        
+        return True, None
+    
+    def _check_candle_filter(self, ctx: MonitoringContext, df_m1: pd.DataFrame) -> bool:
+        """Cek candle close filter. Returns True jika boleh lanjut."""
+        candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', False)
+        if not candle_close_only or len(df_m1) == 0:
+            return True
+        
+        current_candle_timestamp = df_m1.index[-1] if hasattr(df_m1.index[-1], 'timestamp') else df_m1.index[-1]
+        
+        if ctx.last_candle_timestamp is not None:
+            if current_candle_timestamp == ctx.last_candle_timestamp:
+                return False
+            else:
+                logger.debug(f"🕯️ Candle baru terdeteksi: {current_candle_timestamp}")
+        
+        ctx.last_candle_timestamp = current_candle_timestamp
+        return True
+    
+    def _is_duplicate_signal(self, ctx: MonitoringContext, signal_direction: str, 
+                             signal_price: float, now: datetime) -> bool:
+        """Cek apakah sinyal adalah duplikat."""
+        if not signal_direction or not ctx.last_sent_signal:
+            return False
+        
+        same_direction = (signal_direction == ctx.last_sent_signal)
+        time_too_soon = (now - ctx.last_sent_signal_time).total_seconds() < 5
+        
+        same_price = False
+        price_diff_pips = 0.0
+        if signal_price is not None and ctx.last_sent_signal_price is not None:
+            price_diff_pips = abs(signal_price - ctx.last_sent_signal_price) * self.config.XAUUSD_PIP_VALUE
+            same_price = price_diff_pips < 5.0
+        
+        is_duplicate = same_direction and time_too_soon and same_price
+        
+        if is_duplicate and signal_price is not None and ctx.last_sent_signal_price is not None:
+            logger.debug(f"Duplicate signal detected: {signal_direction} @{signal_price:.2f} (last: {ctx.last_sent_signal_price:.2f}, diff: {price_diff_pips:.1f} pips)")
+        
+        return is_duplicate
+    
+    async def _fetch_m5_indicators(self, indicator_engine) -> Optional[Dict]:
+        """Fetch M5 indicators untuk multi-timeframe confirmation."""
+        try:
+            df_m5 = await self.market_data.get_historical_data('M5', 50)
+            if df_m5 is not None and len(df_m5) >= 20:
+                m5_indicators = indicator_engine.get_indicators(df_m5)
+                logger.debug(f"✅ M5 data loaded untuk confirmation ({len(df_m5)} candles)")
+                return m5_indicators
+            else:
+                logger.debug(f"⚠️ M5 data tidak cukup untuk confirmation ({len(df_m5) if df_m5 is not None else 0} candles) - AUTO signal tetap lanjut tanpa M5")
+                return None
+        except Exception as m5_error:
+            logger.debug(f"⚠️ Error fetching M5 data: {m5_error} - AUTO signal tetap lanjut tanpa M5")
+            return None
+    
+    async def _dispatch_signal(self, ctx: MonitoringContext, signal: Dict, 
+                               df_m1: pd.DataFrame, now: datetime) -> bool:
+        """Dispatch signal ke user. Returns True jika berhasil."""
+        signal_direction = signal.get('signal')
+        signal_price = signal.get('entry_price')
+        
+        async with self.signal_lock:
+            global_time_since_signal = (datetime.now() - self.global_last_signal_time).total_seconds()
+            
+            if global_time_since_signal < self.global_signal_cooldown:
+                wait_time = self.global_signal_cooldown - global_time_since_signal
+                logger.info(f"Global cooldown aktif, menunda sinyal {wait_time:.1f}s untuk user {mask_user_id(ctx.chat_id)}")
+                await asyncio.sleep(wait_time)
+            
+            if self.signal_session_manager:
+                can_create, block_reason = await self.signal_session_manager.can_create_signal(
+                    ctx.chat_id, 'auto', position_tracker=self.position_tracker
+                )
+                if not can_create:
+                    logger.info(f"Signal creation blocked for user {mask_user_id(ctx.chat_id)}: {block_reason}")
+                    return False
+                
+                await self.signal_session_manager.create_session(
+                    ctx.chat_id,
+                    f"auto_{int(time.time())}",
+                    'auto',
+                    signal['signal'],
+                    signal['entry_price'],
+                    signal['stop_loss'],
+                    signal['take_profit']
+                )
+            elif await self.position_tracker.has_active_position_async(ctx.chat_id):
+                logger.debug(f"Skipping - user has active position (race condition check)")
+                return False
+            
+            await self._send_signal(ctx.chat_id, ctx.chat_id, signal, df_m1)
+            
+            ctx.update_last_signal(signal_direction, signal_price, now)
+            self.global_last_signal_time = now
+        
+        self.risk_manager.record_signal(ctx.chat_id)
+        ctx.last_signal_check = now
+        
+        if self.user_manager:
+            self.user_manager.update_user_activity(ctx.chat_id)
+        
+        ctx.reset_retry_delay()
+        return True
+    
+    async def _process_signal_detection(self, ctx: MonitoringContext, df_m1: pd.DataFrame, 
+                                        spread: float, now: datetime) -> bool:
+        """Process signal detection dan dispatch. Returns True jika signal terkirim."""
+        from bot.indicators import IndicatorEngine
+        indicator_engine = IndicatorEngine(self.config)
+        indicators = indicator_engine.get_indicators(df_m1)
+        
+        if not indicators:
+            return False
+        
+        m5_indicators = await self._fetch_m5_indicators(indicator_engine)
+        
+        signal = self.strategy.detect_signal(
+            indicators, 'M1', 
+            signal_source='auto',
+            m5_indicators=m5_indicators
+        )
+        
+        if not signal:
+            return False
+        
+        signal_direction = signal.get('signal')
+        signal_price = signal.get('entry_price')
+        
+        if self._is_duplicate_signal(ctx, signal_direction, signal_price, now):
+            return False
+        
+        time_since_last_check = (now - ctx.last_signal_check).total_seconds()
+        if time_since_last_check < self.config.SIGNAL_COOLDOWN_SECONDS:
+            logger.debug(f"Per-user cooldown aktif, tunggu {self.config.SIGNAL_COOLDOWN_SECONDS - time_since_last_check:.1f}s lagi")
+            return False
+        
+        can_trade, rejection_reason = self.risk_manager.can_trade(ctx.chat_id, signal['signal'])
+        if not can_trade:
+            return False
+        
+        is_valid, validation_msg = self.strategy.validate_signal(signal, spread)
+        if not is_valid:
+            return False
+        
+        return await self._dispatch_signal(ctx, signal, df_m1, now)
+    
+    async def _handle_tick_timeout(self, ctx: MonitoringContext, tick_queue) -> Tuple[bool, Any]:
+        """Handle tick timeout. Returns (should_continue, new_tick_queue)."""
+        needs_resubscribe = ctx.record_timeout()
+        logger.debug(f"Tick queue timeout untuk user {mask_user_id(ctx.chat_id)} ({ctx.consecutive_timeouts}/{ctx.max_consecutive_timeouts}), mencoba lagi...")
+        
+        if needs_resubscribe:
+            try:
+                logger.info(f"🔄 Re-subscribing setelah {ctx.max_consecutive_timeouts} consecutive timeouts untuk user {mask_user_id(ctx.chat_id)}")
+                await self.market_data.unsubscribe_ticks(f'telegram_bot_{ctx.chat_id}')
+                new_queue = await self.market_data.subscribe_ticks(f'telegram_bot_{ctx.chat_id}')
+                ctx.reset_timeouts()
+                logger.info(f"✅ Re-subscribed berhasil untuk user {mask_user_id(ctx.chat_id)}")
+                return True, new_queue
+            except Exception as resubscribe_error:
+                logger.error(f"❌ Error saat re-subscribe untuk user {mask_user_id(ctx.chat_id)}: {resubscribe_error}")
+                await asyncio.sleep(5.0)
+        
+        return True, tick_queue
+    
     async def _monitoring_loop(self, chat_id: int):
+        """Main monitoring loop - orchestrates signal detection dengan helper coroutines."""
         tick_queue = await self.market_data.subscribe_ticks(f'telegram_bot_{chat_id}')
         logger.debug(f"Monitoring dimulai untuk user {mask_user_id(chat_id)}")
         
-        last_signal_check = datetime.now() - timedelta(seconds=self.config.SIGNAL_COOLDOWN_SECONDS)
-        last_tick_process_time = datetime.now() - timedelta(seconds=self.tick_throttle_seconds)
-        last_sent_signal = None
-        last_sent_signal_price = None
-        last_sent_signal_time = datetime.now() - timedelta(seconds=5)
-        retry_delay = 1.0
-        max_retry_delay = 30.0
-        last_candle_timestamp = None  # Tracking timestamp candle terakhir untuk detect candle baru
-        consecutive_timeouts = 0
-        MAX_CONSECUTIVE_TIMEOUTS = 5
-        
-        # Tracking untuk daily summary skip
-        daily_summary_skip_count = 0
-        last_daily_summary_log_time = datetime.now() - timedelta(seconds=60)
+        ctx = MonitoringContext(chat_id=chat_id)
+        ctx.last_signal_check = datetime.now() - timedelta(seconds=self.config.SIGNAL_COOLDOWN_SECONDS)
         
         try:
             while self.monitoring and chat_id in self.monitoring_chats and not self._is_shutting_down:
                 try:
-                    # === CEK DAILY SUMMARY FLAG ===
-                    # Skip signal detection sementara saat daily summary sedang dikirim
-                    # untuk menghindari blocking/stuck pada monitoring loop
-                    if self.alert_system and self.alert_system.is_sending_daily_summary():
-                        daily_summary_skip_count += 1
-                        now_check = datetime.now()
-                        
-                        # Log setiap 10 detik untuk debugging, tidak spam log
-                        if (now_check - last_daily_summary_log_time).total_seconds() >= 10:
-                            logger.debug(f"📊 [MONITORING] Skip signal detection - daily summary sedang dikirim (skip count: {daily_summary_skip_count}) | User:{mask_user_id(chat_id)}")
-                            last_daily_summary_log_time = now_check
-                        
-                        # Short sleep dan continue, loop tetap berjalan
-                        await asyncio.sleep(0.5)
+                    if await self._check_daily_summary_pause(ctx):
                         continue
-                    
-                    # Reset counter jika daily summary selesai
-                    if daily_summary_skip_count > 0:
-                        logger.info(f"📊 [MONITORING] Daily summary selesai - signal detection resume (total skip: {daily_summary_skip_count}) | User:{mask_user_id(chat_id)}")
-                        daily_summary_skip_count = 0
                     
                     tick = await asyncio.wait_for(tick_queue.get(), timeout=30.0)
-                    consecutive_timeouts = 0
+                    ctx.reset_timeouts()
                     
                     now = datetime.now()
-                    
-                    # Tick throttling - jangan process setiap tick untuk hemat CPU
-                    time_since_last_tick = (now - last_tick_process_time).total_seconds()
+                    time_since_last_tick = (now - ctx.last_tick_process_time).total_seconds()
                     if time_since_last_tick < self.tick_throttle_seconds:
                         continue
-                    
-                    last_tick_process_time = now
+                    ctx.last_tick_process_time = now
                     
                     df_m1 = await self.market_data.get_historical_data('M1', 100)
-                    
-                    if df_m1 is None:
+                    if df_m1 is None or len(df_m1) < 30:
                         continue
                     
-                    candle_count = len(df_m1)
+                    if not self._check_candle_filter(ctx, df_m1):
+                        continue
                     
-                    # === CANDLE CLOSE ONLY SIGNALS ===
-                    # Jika CANDLE_CLOSE_ONLY_SIGNALS aktif, hanya proses signal saat candle baru terbentuk
-                    candle_close_only = getattr(self.config, 'CANDLE_CLOSE_ONLY_SIGNALS', False)
-                    if candle_close_only and candle_count > 0:
-                        current_candle_timestamp = df_m1.index[-1] if hasattr(df_m1.index[-1], 'timestamp') else df_m1.index[-1]
-                        
-                        # Cek apakah ini candle baru
-                        if last_candle_timestamp is not None:
-                            if current_candle_timestamp == last_candle_timestamp:
-                                # Masih candle yang sama, skip signal detection
-                                continue
-                            else:
-                                # Candle baru terdeteksi
-                                logger.debug(f"🕯️ Candle baru terdeteksi: {current_candle_timestamp}")
-                        
-                        # Update tracking candle timestamp
-                        last_candle_timestamp = current_candle_timestamp
+                    can_proceed, _ = await self._check_position_eligibility(ctx)
+                    if not can_proceed:
+                        continue
                     
-                    if candle_count >= 30:
-                        # EARLY CHECK: Skip signal detection if user already has active position
-                        if self.signal_session_manager:
-                            can_create, block_reason = await self.signal_session_manager.can_create_signal(
-                                chat_id, 'auto', position_tracker=self.position_tracker
-                            )
-                            if not can_create:
-                                logger.debug(f"⏸️ Signal blocked - {block_reason} | User:{mask_user_id(chat_id)} | Will recheck in 0.5s")
-                                await asyncio.sleep(0.5)
-                                continue
-                        elif self.position_tracker.has_active_position(chat_id):
-                            logger.debug(f"⏸️ Signal blocked - active position exists | User:{mask_user_id(chat_id)} | Will recheck in 0.5s")
-                            await asyncio.sleep(0.5)
-                            continue
-                        else:
-                            logger.debug(f"✅ No active position - ready for new signal | User:{mask_user_id(chat_id)}")
-                        
-                        current_price = await self.market_data.get_current_price()
-                        spread_value = await self.market_data.get_spread()
-                        spread = spread_value if spread_value else 0.5
-                        
-                        if spread > self.config.MAX_SPREAD_PIPS:
-                            logger.debug(f"Spread terlalu lebar ({spread:.2f} pips), skip signal detection")
-                            continue
-                        
-                        # Signal detection - hanya jika tidak ada posisi aktif
-                        from bot.indicators import IndicatorEngine
-                        indicator_engine = IndicatorEngine(self.config)
-                        indicators = indicator_engine.get_indicators(df_m1)
-                        
-                        # === FETCH M5 DATA UNTUK CONFIRMATION ===
-                        # M5 confirmation digunakan untuk memvalidasi trend dari timeframe lebih tinggi
-                        # Ini meningkatkan akurasi signal AUTO dengan memastikan alignment multi-timeframe
-                        m5_indicators = None
-                        try:
-                            df_m5 = await self.market_data.get_historical_data('M5', 50)
-                            if df_m5 is not None and len(df_m5) >= 20:
-                                m5_indicators = indicator_engine.get_indicators(df_m5)
-                                logger.debug(f"✅ M5 data loaded untuk confirmation ({len(df_m5)} candles)")
-                            else:
-                                logger.debug(f"⚠️ M5 data tidak cukup untuk confirmation ({len(df_m5) if df_m5 is not None else 0} candles) - AUTO signal tetap lanjut tanpa M5")
-                        except Exception as m5_error:
-                            logger.debug(f"⚠️ Error fetching M5 data: {m5_error} - AUTO signal tetap lanjut tanpa M5")
-                        
-                        if indicators:
-                            signal = self.strategy.detect_signal(
-                                indicators, 'M1', 
-                                signal_source='auto',
-                                m5_indicators=m5_indicators
-                            )
-                            
-                            # Avoid duplicate signals - check if this is a new signal (different price or direction)
-                            signal_direction = signal['signal'] if signal else None
-                            signal_price = signal['entry_price'] if signal else None
-                            
-                            is_duplicate = False
-                            if signal_direction and last_sent_signal:
-                                same_direction = (signal_direction == last_sent_signal)
-                                time_too_soon = (now - last_sent_signal_time).total_seconds() < 5
-                                
-                                # Check if price is almost same (within 5 pips tolerance)
-                                same_price = False
-                                price_diff_pips = 0.0
-                                if signal_price is not None and last_sent_signal_price is not None:
-                                    price_diff_pips = abs(signal_price - last_sent_signal_price) * self.config.XAUUSD_PIP_VALUE
-                                    same_price = price_diff_pips < 5.0
-                                
-                                is_duplicate = same_direction and time_too_soon and same_price
-                                
-                                if is_duplicate and signal_price is not None and last_sent_signal_price is not None:
-                                    logger.debug(f"Duplicate signal detected: {signal_direction} @{signal_price:.2f} (last: {last_sent_signal_price:.2f}, diff: {price_diff_pips:.1f} pips)")
-                            
-                            if signal and not is_duplicate:
-                                time_since_last_check = (now - last_signal_check).total_seconds()
-                                
-                                if time_since_last_check < self.config.SIGNAL_COOLDOWN_SECONDS:
-                                    logger.debug(f"Per-user cooldown aktif, tunggu {self.config.SIGNAL_COOLDOWN_SECONDS - time_since_last_check:.1f}s lagi")
-                                    continue
-                                
-                                can_trade, rejection_reason = self.risk_manager.can_trade(chat_id, signal['signal'])
-                                
-                                if can_trade:
-                                    is_valid, validation_msg = self.strategy.validate_signal(signal, spread)
-                                    
-                                    if is_valid:
-                                        async with self.signal_lock:
-                                            global_time_since_signal = (datetime.now() - self.global_last_signal_time).total_seconds()
-                                            
-                                            if global_time_since_signal < self.global_signal_cooldown:
-                                                wait_time = self.global_signal_cooldown - global_time_since_signal
-                                                logger.info(f"Global cooldown aktif, menunda sinyal {wait_time:.1f}s untuk user {mask_user_id(chat_id)}")
-                                                await asyncio.sleep(wait_time)
-                                            
-                                            # Double check sebelum create session (untuk race condition)
-                                            if self.signal_session_manager:
-                                                can_create, block_reason = await self.signal_session_manager.can_create_signal(
-                                                    chat_id, 'auto', position_tracker=self.position_tracker
-                                                )
-                                                if not can_create:
-                                                    logger.info(f"Signal creation blocked for user {mask_user_id(chat_id)}: {block_reason}")
-                                                    continue
-                                                
-                                                await self.signal_session_manager.create_session(
-                                                    chat_id,
-                                                    f"auto_{int(time.time())}",
-                                                    'auto',
-                                                    signal['signal'],
-                                                    signal['entry_price'],
-                                                    signal['stop_loss'],
-                                                    signal['take_profit']
-                                                )
-                                            elif self.position_tracker.has_active_position(chat_id):
-                                                logger.debug(f"Skipping - user has active position (race condition check)")
-                                                continue
-                                            
-                                            await self._send_signal(chat_id, chat_id, signal, df_m1)
-                                            
-                                            # Track sent signal to prevent duplicates
-                                            last_sent_signal = signal_direction
-                                            last_sent_signal_price = signal_price
-                                            last_sent_signal_time = now
-                                            self.global_last_signal_time = now
-                                        
-                                        self.risk_manager.record_signal(chat_id)
-                                        last_signal_check = now
-                                        
-                                        if self.user_manager:
-                                            self.user_manager.update_user_activity(chat_id)
-                                        
-                                        retry_delay = 1.0
+                    spread_value = await self.market_data.get_spread()
+                    spread = spread_value if spread_value else 0.5
+                    if spread > self.config.MAX_SPREAD_PIPS:
+                        logger.debug(f"Spread terlalu lebar ({spread:.2f} pips), skip signal detection")
+                        continue
+                    
+                    await self._process_signal_detection(ctx, df_m1, spread, now)
                     
                 except asyncio.TimeoutError:
-                    consecutive_timeouts += 1
-                    logger.debug(f"Tick queue timeout untuk user {mask_user_id(chat_id)} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS}), mencoba lagi...")
-                    
-                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
-                        try:
-                            logger.info(f"🔄 Re-subscribing setelah {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts untuk user {mask_user_id(chat_id)}")
-                            await self.market_data.unsubscribe_ticks(f'telegram_bot_{chat_id}')
-                            tick_queue = await self.market_data.subscribe_ticks(f'telegram_bot_{chat_id}')
-                            consecutive_timeouts = 0
-                            logger.info(f"✅ Re-subscribed berhasil untuk user {mask_user_id(chat_id)}")
-                        except Exception as resubscribe_error:
-                            logger.error(f"❌ Error saat re-subscribe untuk user {mask_user_id(chat_id)}: {resubscribe_error}")
-                            await asyncio.sleep(5.0)
-                    
-                    continue
+                    should_continue, tick_queue = await self._handle_tick_timeout(ctx, tick_queue)
+                    if should_continue:
+                        continue
                 except asyncio.CancelledError:
                     logger.info(f"Monitoring loop cancelled for user {mask_user_id(chat_id)}")
                     break
                 except ConnectionError as e:
-                    logger.warning(f"Connection error dalam monitoring loop: {e}, retry in {retry_delay}s")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                    logger.warning(f"Connection error dalam monitoring loop: {e}, retry in {ctx.retry_delay}s")
+                    await asyncio.sleep(ctx.retry_delay)
+                    ctx.increase_retry_delay()
                 except Forbidden as e:
                     logger.warning(f"Forbidden error in monitoring loop for {mask_user_id(chat_id)}: {e}")
                     await self._handle_forbidden_error(chat_id, e)
@@ -1841,16 +1915,16 @@ class TradingBot:
                     break
                 except BadRequest as e:
                     await self._handle_bad_request(chat_id, e, context="monitoring_loop")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                    await asyncio.sleep(ctx.retry_delay)
+                    ctx.increase_retry_delay()
                 except (TimedOut, NetworkError) as e:
                     logger.warning(f"Network/Timeout error in monitoring loop for {mask_user_id(chat_id)}: {e}")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                    await asyncio.sleep(ctx.retry_delay)
+                    ctx.increase_retry_delay()
                 except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
                     logger.error(f"Error processing tick dalam monitoring loop: {type(e).__name__}: {e}")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                    await asyncio.sleep(ctx.retry_delay)
+                    ctx.increase_retry_delay()
                     
         finally:
             await self.market_data.unsubscribe_ticks(f'telegram_bot_{chat_id}')
@@ -1967,7 +2041,7 @@ class TradingBot:
                 logger.warning(f"🚫 Duplicate signal blocked for user {mask_user_id(user_id)}: {signal['signal']} @${signal['entry_price']:.2f}")
                 return
 
-            if self.position_tracker.has_active_position(user_id):
+            if await self.position_tracker.has_active_position_async(user_id):
                 logger.warning(f"🚫 Signal blocked - user {mask_user_id(user_id)} already has active position (position_tracker)")
                 await self._rollback_signal_cache(user_id, signal['signal'], signal['entry_price'])
                 return

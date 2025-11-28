@@ -1689,8 +1689,12 @@ class PositionTracker:
     def has_active_position(self, user_id: int) -> bool:
         """Check if user has active position with multi-source verification including DB fallback
         
+        CATATAN THREAD-SAFETY:
+        Method ini BUKAN sepenuhnya thread-safe karena mengakses active_positions
+        tanpa lock. Untuk operasi kritis di context async, gunakan has_active_position_async().
+        
         Checks multiple sources for redundancy:
-        1. In-memory active_positions cache
+        1. In-memory active_positions cache (non-locked, read-only)
         2. Database fallback (critical for restart scenarios)
         
         NOTE: Does NOT check SignalSessionManager to avoid circular dependency
